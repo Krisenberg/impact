@@ -1,7 +1,7 @@
 [project]
 name = "impact"
 version = "0.1.0"
-description = "Add your description here"
+description = "Intention-Modulated Personalized ACT-R: an extension to the ACT-R cognitive architecture that modulates memory traces based on user intent, applied to sequential music recommendations"
 readme = "README.md"
 authors = [
     { name = "Krzysztof Głowacz", email = "krzysztofglowacz88@gmail.com" }
@@ -12,3 +12,169 @@ dependencies = []
 [build-system]
 requires = ["uv_build>=0.11.0,<0.12.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.39.4",
+    "mypy>=2.1.0",
+    "ruff>=0.15.13",
+]
+
+[tool.ruff]
+include = [
+    "pyproject.toml",
+    "src/**/*.py",
+    "tests/**/*.py",
+]
+exclude = []      # Add specific files or directories if needed
+line-length = 88  # Like Black (max line length)
+indent-width = 4  # Like Black (indentation width)
+
+[tool.ruff.lint]
+# For more information, see https://docs.astral.sh/ruff/rules/
+# On top of the default `select`, enable the following
+extend-select = [
+    # Code style
+    "E",    # pycodestyle-errors (PEP 8 violations)
+    "W",    # pycodestyle-warnings (PEP 8 warnings)
+    "D",    # pydocstyle (docstring conventions)
+    "N",    # pep8-naming (naming conventions)
+
+    # Correctness
+    "F",    # pyflakes (undefined names, unused imports)
+    "B",    # flake8-bugbear (likely bugs and design issues)
+    "A",    # flake8-builtins (detect shadowed builtins)
+    "BLE",  # flake8-blind-except (disallow bare catch-all exceptions)
+    "FBT",  # flake8-boolean-trap (boolean positional args in function signatures)
+    "S",    # flake8-bandit (security linting)
+    "DTZ",  # flake8-datetimez (require timezone-aware datetime objects)
+    "ARG",  # flake8-unused-arguments (unused function/method arguments)
+
+    # Modernization (in terms of language syntax)
+    "UP",   # pyupgrade (upgrade syntax to target Python version)
+    "TC",   # flake8-type-checking (TYPE_CHECKING block import hygiene)
+
+    # Imports
+    "I",    # isort (import ordering)
+    "TID",  # flake8-tidy-imports (import style enforcement)
+
+    # Simplification & readability
+    "C4",   # flake8-comprehensions (prefer idiomatic comprehensions: list, dict, etc.)
+    "SIM",  # flake8-simplify (common simplification rules)
+    "RET",  # flake8-return (return statement best practices)
+    "PERF", # perflint (obvious performance anti-patterns)
+
+    # Strings & paths
+    "ISC",  # flake8-implicit-str-concat (implicit string concatenation rules)
+    "PTH",  # flake8-use-pathlib (prefer pathlib over os.path)
+
+    # Ruff-native
+    "RUF",  # Ruff-specific rules
+
+    # Project-specific (or library/framework-specific) - remove if not applicable
+    "PT",   # flake8-pytest-style (pytest best practices)
+]
+ignore = [
+    # Docstrings - intentionally relaxed
+    "D100",   # missing-docstring-in-public-module
+    "D104",   # missing-docstring-in-public-package
+    "D105",   # missing-docstring-in-magic-method
+    "D106",   # missing-docstring-in-public-nested-class
+    "D107",   # missing-docstring-in-init
+
+    # Return
+    "RET504", # unnecessary-assign-before-return (named variable helps debuggability)
+
+    # Type checking
+    "TC006",  # typing-cast-without-quotes (explicit cast calls don't need string quoting)
+
+    # Boolean trap
+    "FBT001", # boolean-type-hint-positional-argument
+    "FBT002", # boolean-default-value-positional-argument
+
+    # Formatter conflicts - https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
+    "COM812", # missing-trailing-comma
+    "COM819", # prohibited-trailing-comma
+    "D206",   # docstring-tab-indentation
+    "D300",   # triple-single-quotes
+    "E111",   # indentation-with-invalid-multiple
+    "E114",   # indentation-with-invalid-multiple-comment
+    "E117",   # over-indented
+    "Q000",   # bad-quotes-inline-string
+    "Q001",   # bad-quotes-multiline-string
+    "Q002",   # bad-quotes-docstring
+    "Q003",   # avoidable-escaped-quote
+    "Q004",   # unnecessary-escaped-quote
+    "W191",   # tab-indentation
+]
+fixable = ["ALL"]
+unfixable = [
+    "D",  # pydocstyle - avoid silently rewriting others' docstrings
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"  # Use the Google style in docstrings
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",    # assert-used (idiomatic in pytest)
+    "S105",    # hardcoded-password-string (common in fixtures)
+    "S106",    # hardcoded-password-func-arg (common in fixtures)
+    "S311",    # suspicious-non-cryptographic-random (acceptable in tests)
+    "ARG",     # unused-function-argument (fixtures are injected, not called directly)
+    "FBT",     # boolean-positional-arg (common in @pytest.mark.parametrize)
+    "D103",    # undocumented-public-function (tests often do not require docstrings)
+    "E501",    # line-too-long
+]
+
+[tool.ruff.format]
+quote-style = "double"  # Like Black (double quotes for strings)
+indent-style = "space"  # Like Black (spaces for indentation instead of tabs)
+
+[tool.mypy]
+strict = true                # Strict mode, refer to the mypy docs for details
+python_version = "3.12"      # Type check code assuming it will be running on the specified Python version
+pretty = true                # Use visually nicer output in error messages
+files = [                    # Type-check given files or directories
+    "src",
+    "tests"
+]
+show_error_codes = true      # Prefix each error with the relevant context
+show_error_code_links = true # Print a URL to the docs next to each error
+warn_unreachable = true      # Warn on unreachable or redundant code
+
+# Allow error codes globally
+enable_error_code = [
+    "explicit-override",   # Require @override when overriding base class methods
+    "deprecated",          # Warn on deprecated typing constructs
+    "redundant-expr",      # Warn on expressions that are always true/false
+    "possibly-undefined",  # Warn on variables that may be undefined at runtime
+    "truthy-bool",         # Warn on incorrect __bool__ / truthiness usage
+    "ignore-without-code", # Require error code on all # type: ignore comments
+    "mutable-override",    # Warn on unsafe overrides of mutable attributes
+    "exhaustive-match",    # Warn on non-exhaustive match statements
+]
+
+exclude = [
+    '\.venv',  # TOML's single-quoted strings do not require escaping backslashes
+]
+
+# Module-specific overrides
+# [[tool.mypy.overrides]]
+# module = []
+# ignore_missing_imports = true  # Ignore missing library stubs or py.typed markers from 3rd-party libraries
+
+[tool.basedpyright]
+include = ["src", "tests"]       # Scan and analyze given files or directories
+exclude = [".venv", "dist"]      # Exclude from the analysis given files or directories
+ignore = [                       # Suppress all diagnostics (e.g., for a legacy code)
+    "src/legacy",
+]
+pythonVersion = "3.12"           # Assume this Python version when type checking
+typeCheckingMode = "recommended" # Basedpyright-native strict mode
+reportMissingTypeStubs = false   # Don't error on third-party libraries without type stubs
+
+executionEnvironments = [
+  { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
+  { root = "src" },
+]
