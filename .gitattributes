@@ -1,0 +1,22 @@
+# Force LF line endings for text files in the repo
+* text=auto eol=lf
+
+# Force LF on the source code files explicitly
+*.py text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+
+# Treat these files as binary (no line-ending conversion)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.zip binary
+*.exe binary
+*.pkl binary
+
+# Explicitly mark Windows-specific scripts as CRLF
+*.bat text eol=crlf
