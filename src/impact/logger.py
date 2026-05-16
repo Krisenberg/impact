@@ -121,6 +121,7 @@ def _configure_file_handler(
     """Configure the file handler."""
     file_handler = logging.FileHandler(log_file)
 
+    processors: list[structlog.types.Processor]
     if json_format:
         processors = [
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
