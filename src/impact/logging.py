@@ -16,27 +16,29 @@ def configure_logging(
     """Configure application-wide logging using structlog.
 
     This function should be called once at the application's entry point.
+    It catches both structlog logs and standard library logs (e.g., from PyTorch) and
+    routes them through the same formatting pipeline.
 
     The configuration is inspired by the structlog docs:
     https://www.structlog.org/en/stable/performance.html
 
     Args:
         level: The minimum log level to display.
-        log_file: Path to a log file with logs in a human-readable format (.log).
+        log_file: Path to a human-readable log file (.log).
             If None (default), no such file will be created.
-        json_log_file: Path to a log file with logs in a machine-readable format (JSON).
+        json_log_file: Path to a machine-readable JSON log file.
             If None (default), no such file will be created.
-        details: If set to True, details such as a filename, line number etc. will be
-            added to the log messages.
+        details: If True, call site details (e.g., file name, line number) will be added
+            to log messages.
     """
-    shared_processors = [
-        # Add timestamps
+    shared_processors: list[structlog.types.Processor] = [
+        # Add timestamps in ISO 8601 UTC format
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         # Add log level
         structlog.processors.add_log_level,
         # Add logger name
         structlog.stdlib.add_logger_name,
-        # Add exception info on error
+        # Add exception info on error to the event dict
         structlog.dev.set_exc_info,
     ]
 
@@ -52,37 +54,43 @@ def configure_logging(
             )
         )
 
-    structlog_processors = shared_processors + [
+    # These processors run ONLY on structlog events before they are passed to stdlib
+    structlog_processors = [
+        *shared_processors,
         structlog.contextvars.merge_contextvars,
+        # Prepare event dict for the standard library formatter
         structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
     ]
 
     structlog.configure(
         cache_logger_on_first_use=True,
+        # High performance filtering
         wrapper_class=structlog.make_filtering_bound_logger(level),
         processors=structlog_processors,
         context_class=dict,
+        # Route structlog calls into standard logging infrastructure
         logger_factory=structlog.stdlib.LoggerFactory(),
     )
 
     # Configure the standard library logging
-    handlers = [_configure_console_handler(shared_processors)]
+    handlers: list[logging.Handler] = [_configure_console_handler(shared_processors)]
 
-    if log_file:
+    if log_file is not None:
+        log_file = Path(log_file)
         handlers.append(
             _configure_file_handler(shared_processors, log_file, json_format=False)
         )
-    if json_log_file:
+    if json_log_file is not None:
+        json_log_file = Path(json_log_file)
         handlers.append(
             _configure_file_handler(shared_processors, json_log_file, json_format=True)
         )
 
-    # Configure the root logger with handlers defined above
+    # Configure the standard library logging root logger
     logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         level=level,
         handlers=handlers,
-        force=True,  # Override any existing configuration
+        force=True,  # Override any existing configuration done by 3rd party libs
     )
 
 
@@ -116,7 +124,7 @@ def _configure_file_handler(
     if json_format:
         processors = [
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            # Format any exceptions
+            # Format (stringify) exceptions so they don't break JSON
             structlog.processors.format_exc_info,
             # Rename the 'event' (default) key in event dicts to 'msg'
             structlog.processors.EventRenamer(to="msg"),
@@ -126,8 +134,6 @@ def _configure_file_handler(
         # Use the same ConsoleRenderer as for the console output but without colors
         processors = [
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            # Format any exceptions
-            structlog.processors.format_exc_info,
             structlog.dev.ConsoleRenderer(colors=False),
         ]
 
