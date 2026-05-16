@@ -1,0 +1,31 @@
+---
+
+repos:
+  # General-purpose pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml                       # Validate YAML files syntax
+      - id: check-json                       # Validate JSON files syntax
+      - id: check-toml                       # Validate TOML files syntax
+      - id: check-added-large-files          # Prevent giant files from being committed
+      - id: detect-private-key               # Checks for the existence of private keys
+      - id: trailing-whitespace              # Trims trailing whitespace
+        args: [--markdown-linebreak-ext=md]  # To preserve Markdown hard line breaks
+      - id: end-of-file-fixer                # Ensure files end in a newline and only a newline
+      - id: mixed-line-ending                # Ensure consistent line endings (LF)
+        args: [--fix=lf]
+
+  # Sync additional dependencies with uv.lock file (if applicable)
+  - repo: https://github.com/tsvikas/sync-with-uv
+    rev: v0.4.0
+    hooks:
+      - id: sync-with-uv
+
+  # Ruff (linter + formatter)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.13
+    hooks:
+      - id: ruff-check   # Run the linter with --fix flag first
+        args: [--fix]
+      - id: ruff-format  # Run the formatter second (to clean up after linter's fixes)
