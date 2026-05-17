@@ -185,5 +185,6 @@ executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
   { root = "src/impact/configuration.py", reportAny = false, reportUnknownMemberType = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
+  { root = "src/impact/dataset/sessionization.py", reportUnknownMemberType = false },
   { root = "src" },
 ]
