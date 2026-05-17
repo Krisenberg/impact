@@ -8,8 +8,10 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "environ-config>=24.1.0",
     "huggingface-hub>=1.15.0",
     "polars>=1.40.1",
+    "python-dotenv>=1.2.2",
     "structlog>=25.5.0",
 ]
 
@@ -180,5 +182,6 @@ reportMissingTypeStubs = false   # Don't error on third-party libraries without 
 
 executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
+  { root = "src/impact/configuration.py", reportAny = false, reportUnknownMemberType = false },
   { root = "src" },
 ]
