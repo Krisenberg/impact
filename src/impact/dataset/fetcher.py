@@ -47,6 +47,18 @@ class YambdaFetcher:
         data_dir = f"{self.dataset_type}/{self.dataset_size}"
         return self._fetch_and_cache(data_dir=data_dir, file_name=event_type)
 
+    def get_audio_embeddings(self) -> pl.LazyFrame:
+        """Fetch pre-computed CNN audio embeddings, mapping item IDs to embeddings."""
+        return self._fetch_and_cache(data_dir="", file_name="embeddings")
+
+    def get_album_item_mapping(self) -> pl.LazyFrame:
+        """Fetch the item-to-album mapping."""
+        return self._fetch_and_cache(data_dir="", file_name="album_item_mapping")
+
+    def get_artist_item_mapping(self) -> pl.LazyFrame:
+        """Fetch the item-to-artist mapping."""
+        return self._fetch_and_cache(data_dir="", file_name="artist_item_mapping")
+
     def _fetch_and_cache(self, data_dir: str, file_name: str) -> pl.LazyFrame:
         """Fetch the requested data from HuggingFace (download or use local cache)."""
         # Guard for the root-level files
