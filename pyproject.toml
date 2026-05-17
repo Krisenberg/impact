@@ -183,5 +183,6 @@ reportMissingTypeStubs = false   # Don't error on third-party libraries without 
 executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
   { root = "src/impact/configuration.py", reportAny = false, reportUnknownMemberType = false },
+  { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src" },
 ]
