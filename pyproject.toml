@@ -186,5 +186,6 @@ executionEnvironments = [
   { root = "src/impact/configuration.py", reportAny = false, reportUnknownMemberType = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src/impact/dataset/sessionization.py", reportUnknownMemberType = false },
+  { root = "src/impact/features/sequencing.py", reportUnknownMemberType = false, reportExplicitAny = false },
   { root = "src" },
 ]
