@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "click>=8.4.0",
     "environ-config>=24.1.0",
     "huggingface-hub>=1.15.0",
     "polars>=1.40.1",
@@ -187,5 +188,6 @@ executionEnvironments = [
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src/impact/dataset/sessionization.py", reportUnknownMemberType = false },
   { root = "src/impact/features/sequencing.py", reportUnknownMemberType = false, reportExplicitAny = false },
+  { root = "src/impact/features/splitting.py", reportUnknownMemberType = false },
   { root = "src" },
 ]

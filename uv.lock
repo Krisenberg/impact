@@ -380,6 +380,7 @@ name = "impact"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "environ-config" },
     { name = "huggingface-hub" },
     { name = "polars" },
@@ -397,6 +398,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.4.0" },
     { name = "environ-config", specifier = ">=24.1.0" },
     { name = "huggingface-hub", specifier = ">=1.15.0" },
     { name = "polars", specifier = ">=1.40.1" },
