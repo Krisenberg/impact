@@ -1,4 +1,4 @@
-"""Module for transforming sessionized data into sliding window sequences."""
+"""Module for transforming sessionized data into sequences of sessions."""
 
 from typing import Any
 
