@@ -26,9 +26,8 @@ def preprocess_sessions(
             standard used by authors of other publications).
 
     Returns:
-        A Polars LazyFrame extending the `events_lf` by the following columns:
-        - `actual_played_seconds`: Actual listening time in seconds.
-        - `session_id`: Assigned session ID, unique per user (not globally unique).
+        A Polars LazyFrame extending the events_lf by the session_id column containing
+        assigned session IDs, unique per user (not globally unique).
     """
     logger.info(
         "Preprocessing raw events into sessions",
@@ -82,7 +81,12 @@ def preprocess_sessions(
         .filter(pl.col("session_track_count") == tracks_per_session)
 
         # Clean up temporary processing columns
-        .drop(["time_diff", "is_new_session", "session_track_count"])
+        .drop([
+            "actual_played_seconds",
+            "time_diff",
+            "is_new_session",
+            "session_track_count",
+        ])
     )
 
     logger.info("Raw events data successfully preprocessed into sessions (lazily!)")
