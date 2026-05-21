@@ -11,19 +11,24 @@ logger = structlog.stdlib.get_logger(__name__)
 def create_sequences(
     sessions_lf: pl.LazyFrame,
     context_sessions: int = 20,  # L
-    step: int = 5,
+    step: int = 20,
+    assign_index: bool = True,
 ) -> pl.LazyFrame:
-    """Create sequences of context_sessions + 1 (L+1) sessions for each user.
+    """Create sequences consisting of context_sessions + 1 (L+1) sessions for each user.
 
     A sliding window technique is used for creating the sequences. Each sequence
     contains context_sessions (L) context sessions and 1 target session.
 
     Args:
-        sessions_lf: Sessionized LazyFrame containing 'listen' events and the following
-            columns: uid, session_id, item_id, timestamp.
+        sessions_lf: Sessionized LazyFrame containing only 'listen' events and a
+            session_id column with assigned ID of the session that each event belongs
+            to (unique per user).
         context_sessions: Number of context sessions per sequence. Denoted as L in the
             thesis.
         step: Sliding window step size.
+        assign_index: Whether to assign a globally unique sequence index. Should be set
+            to False when processing partitioned data, as the index must be assigned
+            after merging all partitions to ensure global uniqueness.
 
     Returns:
         LazyFrame representing user-scoped sequences of sessions with columns:
@@ -99,10 +104,11 @@ def create_sequences(
 
         # Remove aggregated sessions column which is no longer needed
         .drop("all_sessions")
-
-        # Assign sequence ID (globally unique)
-        .with_row_index("sequence_idx", offset=1)
     )
+
+    if assign_index:
+        # Assign sequence ID (globally unique)
+        sequences = sequences.with_row_index("sequence_idx", offset=1)
 
     logger.info("Sequence creation complete")
     return sequences
