@@ -1,4 +1,4 @@
-"""Module for preprocessing raw events from the dataset into sessions."""
+"""Module for processing raw events from the dataset and extracting sessions."""
 
 import polars as pl
 import structlog
@@ -6,13 +6,13 @@ import structlog
 logger = structlog.stdlib.get_logger(__name__)
 
 
-def preprocess_sessions(
+def extract_sessions(
     events_lf: pl.LazyFrame,
     inactivity_gap_seconds: int = 1200,
     tracks_per_session: int = 10,  # K
-    min_listen_seconds: int = 30,  # Treshold defining a valid listening event
+    min_listen_seconds: int = 30,  # Threshold defining a valid listening event
 ) -> pl.LazyFrame:
-    """Preprocess raw data containing all event types into user-scoped sessions.
+    """Process raw data containing all event types and extract user-scoped sessions.
 
     Args:
         events_lf: A Polars LazyFrame containing all event types.
