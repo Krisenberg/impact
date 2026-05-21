@@ -1,4 +1,4 @@
-"""Module for transforming sessionized data into sequences of sessions."""
+"""Module for extracting sequences of listening sessions from the sessionized data."""
 
 from typing import Any
 
@@ -8,21 +8,21 @@ import structlog
 logger = structlog.stdlib.get_logger(__name__)
 
 
-def create_sequences(
+def extract_sequences(
     sessions_lf: pl.LazyFrame,
     context_sessions: int = 20,  # L
     step: int = 20,
     assign_index: bool = True,
 ) -> pl.LazyFrame:
-    """Create sequences consisting of context_sessions + 1 (L+1) sessions for each user.
+    """Extract sequences of listening sessions using a sliding window technique.
 
-    A sliding window technique is used for creating the sequences. Each sequence
-    contains context_sessions (L) context sessions and 1 target session.
+    Each sequence contains context_sessions (L) sessions defining the listening context,
+    followed by a single target session used for model evaluation.
 
     Args:
-        sessions_lf: Sessionized LazyFrame containing only 'listen' events and a
-            session_id column with assigned ID of the session that each event belongs
-            to (unique per user).
+        sessions_lf: Sessionized LazyFrame of 'listen' events and a session_id column
+            with assigned ID of the session that each event belongs to, as produced by
+            `dataset.extract_sessions()`.
         context_sessions: Number of context sessions per sequence. Denoted as L in the
             thesis.
         step: Sliding window step size.
@@ -32,7 +32,8 @@ def create_sequences(
 
     Returns:
         LazyFrame representing user-scoped sequences of sessions with columns:
-        uid, sequence_idx, target_ts, context, target.
+        uid, target_ts, context, target, and optionally sequence_idx (as the first
+        column) if assign_index is True.
     """
     logger.info(
         "Creating sequences of listening sessions",
@@ -104,6 +105,9 @@ def create_sequences(
 
         # Remove aggregated sessions column which is no longer needed
         .drop("all_sessions")
+
+        # Reorder columns
+        .select(["uid", "target_ts", "context", "target"])
     )
 
     if assign_index:

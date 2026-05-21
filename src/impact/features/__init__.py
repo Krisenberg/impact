@@ -1,5 +1,5 @@
-from .sequencing import create_sequences
+from .sequences import extract_sequences
 
 __all__ = [
-    "create_sequences",
+    "extract_sequences",
 ]
