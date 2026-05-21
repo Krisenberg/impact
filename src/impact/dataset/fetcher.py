@@ -1,4 +1,4 @@
-"""Module for fetching and managing Yambda datasets via HuggingFace."""
+"""Module for fetching and managing Yambda datasets via HuggingFace Hub."""
 
 from pathlib import Path
 from typing import ClassVar
