@@ -70,12 +70,12 @@ class YambdaFetcher:
             repo_id=self._HF_REPO_ID,
             dataset_file=relative_path,
         )
-        local_path = hf_hub_download(
+        local_path_str = hf_hub_download(
             repo_id=self._HF_REPO_ID,
             repo_type="dataset",
             filename=relative_path,
             local_dir=self.cache_dir,
         )
-        local_path = Path(local_path).resolve()
+        local_path = Path(local_path_str).resolve()
         logger.info("Data available in local cache", local_cache=local_path.as_posix())
         return pl.scan_parquet(local_path)
