@@ -1,15 +1,13 @@
 """Orchestrator for the IMPACT data processing pipeline."""
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+import polars as pl
 import structlog
 
-from impact.dataset import (
-    DatasetSize,
-    DatasetType,
-    InteractionType,
-)
+from impact.dataset import DatasetSize, DatasetType, InteractionType
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -26,7 +24,7 @@ class PipelineConfig:
     # === Dataset ===
     dataset_size: DatasetSize
     """Yambda dataset variant to process (50M, 500M, or 5B)."""
-    dataset_type: str = DatasetType.FLAT
+    dataset_type: DatasetType = DatasetType.FLAT
     """Dataset format type. Currently only FLAT is supported."""
     interaction_type: InteractionType = InteractionType.MULTI_EVENT
     """Interaction file to load.
@@ -148,18 +146,57 @@ class DataPipeline:
                 (e.g., train/val/test splits).
             config: The configuration object defining parameters for all pipeline steps.
         """
-        self.raw_dir: Path = raw_dir
+        self.raw_dir: Path = raw_dir.resolve()
+        self.interim_dir: Path = interim_dir.resolve()
+        self.processed_dir: Path = processed_dir.resolve()
         self.config: PipelineConfig = config
 
-        # Nesting directories ensures proper cache invalidation
-        self.sessions_dir: Path = interim_dir / config.sessionization_id
-        self.sequences_dir: Path = self.sessions_dir / config.sequencing_id
-        self.timesplit_dir: Path = (
-            processed_dir
-            / config.sessionization_id
-            / config.sequencing_id
-            / config.timesplit_id
-        )
+    def get_raw_events(self) -> pl.LazyFrame:
+        """Fetch raw interactions (Step 1)."""
+        from impact.dataset import YambdaFetcher
 
-        for d in (self.sessions_dir, self.sequences_dir, self.timesplit_dir):
-            d.mkdir(parents=True, exist_ok=True)
+        fetcher = YambdaFetcher(
+            cache_dir=self.raw_dir,
+            dataset_type=self.config.dataset_type,
+            dataset_size=self.config.dataset_size,
+        )
+        return fetcher.get_interactions(event_type=self.config.interaction_type)
+
+    def get_sessions(self) -> pl.LazyFrame:
+        """Get sessionized data, computing it if not cached (Step 2)."""
+        from impact.dataset import extract_sessions
+
+        sessions_dir = self.interim_dir / self.config.sessionization_id
+        success_marker = sessions_dir / "_SUCCESS"
+
+        partitions_by_dataset_size: dict[DatasetSize, int] = {
+            DatasetSize.SIZE_50M: 1,
+            DatasetSize.SIZE_500M: 4,
+            DatasetSize.SIZE_5B: 32,
+        }
+        n_partitions = partitions_by_dataset_size[self.config.dataset_size]
+
+        # Atomicity check
+        if not success_marker.exists():
+            logger.info("No complete sessionized data found in cache, computing...")
+
+            # Clean up potentially corrupted partial runs
+            if sessions_dir.exists():
+                shutil.rmtree(sessions_dir)
+            sessions_dir.mkdir(parents=True)
+
+            events_lf = self.get_raw_events()
+
+            for i in range(n_partitions):
+                logger.info("Computing partition", partition=i + 1, total=n_partitions)
+                extract_sessions(
+                    events_lf=events_lf.filter(pl.col("uid") % n_partitions == i),
+                    inactivity_gap_seconds=self.config.inactivity_gap_seconds,
+                    tracks_per_session=self.config.tracks_per_session,
+                    min_listen_seconds=self.config.min_listen_seconds,
+                ).sink_parquet(sessions_dir / f"sessions_part_{i}.parquet")
+
+            # Mark as completed
+            success_marker.touch()
+
+        return pl.scan_parquet(sessions_dir / "sessions_part_*.parquet")
