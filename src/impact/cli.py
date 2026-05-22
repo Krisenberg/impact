@@ -23,24 +23,29 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
             "--dataset-size",
             type=click.Choice([e.value for e in DatasetSize]),
             required=True,
-            help="Yambda dataset variant to process (50M, 500M, or 5B)",
+            help="""
+                Yambda dataset variant to process (50M, 500M, or 5B).
+            """,
         ),
         click.option(
             "--dataset-type",
-            type=click.Choice([e.value for e in DatasetType]),
+            type=click.Choice([DatasetType.FLAT.value]),
             default=DatasetType.FLAT.value,
             show_default=True,
-            help="Dataset format type. Currently only FLAT is supported.",
+            help="""
+                Dataset format type. Currently only flat is supported.
+            """,
         ),
         click.option(
             "--interaction-type",
             type=click.Choice([e.value for e in InteractionType]),
             default=InteractionType.MULTI_EVENT.value,
             show_default=True,
-            help="""Interaction file to load.
+            help="""
+                Type of interactions to load from the Yambda dataset.
 
-            MULTI_EVENT includes all event types (listen, like, etc.); other variants
-            contain only a subset.
+                multi_event includes all event types (listen, like, etc.); other
+                variants contain only a specific subset.
             """,
         ),
         click.option(
@@ -57,10 +62,11 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
             type=int,
             default=10,
             show_default=True,
-            help="""Number of tracks that consitute a session. Denoted as K in thesis.
+            help="""
+                Number of tracks that consitute a session. Denoted as K in the thesis.
 
-            Sessions with less than K tracks are discarded. Sessions with more than K
-            tracks are truncated.
+                Sessions with less than K tracks are discarded. Sessions with more than
+                K tracks are truncated.
             """,
         ),
         click.option(
@@ -69,10 +75,10 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
             default=30,
             show_default=True,
             help="""
-            Minimum playback duration (in seconds) to consider an event as a valid
-            listen.
+                Minimum playback duration (in seconds) to consider an event as a valid
+                listen.
 
-            Defaults to 30 (industry standard used by authors of other publications).
+                Defaults to 30 (industry standard used by authors of other papers).
             """,
         ),
         click.option(
@@ -89,7 +95,9 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
             type=int,
             default=5,
             show_default=True,
-            help="Step size for the sliding window sequence generation.",
+            help="""
+                Step size for the sliding window sequence generation.
+            """,
         ),
         click.option(
             "--test-days",
