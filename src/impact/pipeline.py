@@ -182,7 +182,9 @@ class DataPipeline:
 
         from impact.dataset import extract_sessions
 
-        sessions_dir = self.interim_dir / self.config.sessionization_id
+        sessions_dir = (
+            self.interim_dir / self.config.dataset_id / self.config.sessionization_id
+        )
         success_marker = sessions_dir / "_SUCCESS"
 
         # Atomicity check
@@ -225,7 +227,10 @@ class DataPipeline:
         from impact.features import extract_sequences
 
         sequences_dir = (
-            self.interim_dir / self.config.sessionization_id / self.config.sequencing_id
+            self.interim_dir
+            / self.config.dataset_id
+            / self.config.sessionization_id
+            / self.config.sequencing_id
         )
         success_marker = sequences_dir / "_SUCCESS"
 
@@ -274,6 +279,7 @@ class DataPipeline:
 
         splits_dir = (
             self.processed_dir
+            / self.config.dataset_id
             / self.config.sessionization_id
             / self.config.sequencing_id
             / self.config.timesplit_id
