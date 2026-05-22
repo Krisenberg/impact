@@ -24,6 +24,10 @@ typecheck: _uv
     uv run mypy --config-file pyproject.toml
     uv run basedpyright --stats
 
+# Run the IMPACT CLI
+run *ARGS: _uv
+    uv run cli {{ARGS}}
+
 # Recursively remove cache and .pyc/.pyo files
 cleanup:
     @find . -regextype posix-extended -regex '.*(__pycache__|\.py[co])$$' -delete
