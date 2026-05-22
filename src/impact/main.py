@@ -32,6 +32,15 @@ def cli() -> None:
     """,
 )
 @click.option(
+    "--n-partitions",
+    type=int,
+    default=1,
+    help="""
+        Number of partitions for sequential processing. Use >1 for large datasets that
+        exceed available RAM (data is partitioned by user, i.e. uid column).
+    """,
+)
+@click.option(
     "--raw-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
@@ -70,6 +79,7 @@ def cli() -> None:
 def main_pipeline(
     pipeline_config: PipelineConfig,
     log_level: str,
+    n_partitions: int,
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
     processed_data_dir: Path | None = None,
@@ -110,13 +120,13 @@ def main_pipeline(
     events_lf = pipeline.get_raw_events()
     print(f"{ds_size} events_lf: {events_lf.select(pl.len()).collect().item()}")
 
-    sessions_lf = pipeline.get_sessions()
+    sessions_lf = pipeline.get_sessions(n_partitions=n_partitions)
     print(f"{ds_size} sessions_lf: {sessions_lf.select(pl.len()).collect().item()}")
 
-    sequences_lf = pipeline.get_sequences()
+    sequences_lf = pipeline.get_sequences(n_partitions=n_partitions)
     print(f"{ds_size} sequences_lf: {sequences_lf.select(pl.len()).collect().item()}")
 
-    train, val, test = pipeline.get_splits()
+    train, val, test = pipeline.get_splits(n_partitions=n_partitions)
     print(f"{ds_size} train: {train.select(pl.len()).collect().item()}")
     print(f"{ds_size} val: {val.select(pl.len()).collect().item()}")
     print(f"{ds_size} test: {test.select(pl.len()).collect().item()}")

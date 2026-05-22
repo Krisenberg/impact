@@ -175,7 +175,9 @@ class DataPipeline:
         """Get sessionized data, computing it if not cached (Step 2).
 
         Args:
-            n_partitions: Number of partitions to process sequentially.
+            n_partitions: Number of partitions for sequential processing. Use >1 for
+                large datasets that exceed available RAM (data is partitioned by user,
+                i.e. uid column).
         """
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
@@ -219,7 +221,9 @@ class DataPipeline:
         """Get extracted sequences of sessions, computing them if not cached (Step 3).
 
         Args:
-            n_partitions: Number of partitions to process sequentially.
+            n_partitions: Number of partitions for sequential processing. Use >1 for
+                large datasets that exceed available RAM (data is partitioned by user,
+                i.e. uid column).
         """
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
@@ -270,7 +274,9 @@ class DataPipeline:
         """Get final train/val/test splits, computing them if not cached (Step 4).
 
         Args:
-            n_partitions: Number of partitions to process sequentially.
+            n_partitions: Number of partitions for sequential processing. Use >1 for
+                large datasets that exceed available RAM (data is partitioned by user,
+                i.e. uid column).
         """
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
