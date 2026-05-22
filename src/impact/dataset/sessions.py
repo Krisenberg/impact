@@ -42,8 +42,9 @@ def extract_sessions(
 
         # Calculate actual played time in seconds
         .with_columns(
-            (pl.col("track_length_seconds") * pl.col("played_ratio_pct") / 100)
-            .alias("actual_played_seconds")
+            (
+                pl.col("track_length_seconds") * pl.col("played_ratio_pct") / 100
+            ).alias("actual_played_seconds")
         )
 
         # Filter valid listening events
@@ -87,7 +88,7 @@ def extract_sessions(
             "is_new_session",
             "session_track_count",
         ])
-    )
+    )  # fmt: skip
 
     logger.info("Raw events data successfully preprocessed into sessions (lazily!)")
     return sessions_lf

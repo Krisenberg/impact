@@ -45,7 +45,7 @@ def extract_sequences(
         pl.Field("session_id", pl.Int32),
         pl.Field("session_ts", pl.UInt32),
         pl.Field("items", pl.List(pl.UInt32)),
-    ])
+    ])  # fmt: skip
 
     sequence_schema = pl.List(
         pl.Struct([
@@ -53,7 +53,7 @@ def extract_sequences(
             pl.Field("target", session_schema),
             pl.Field("target_ts", pl.UInt32),
         ])
-    )
+    )  # fmt: skip
 
     window_size = context_sessions + 1
 
@@ -66,7 +66,7 @@ def extract_sequences(
                     "context": window[:-1],
                     "target": window[-1],
                     "target_ts": window[-1]["session_ts"],
-                })
+                })  # fmt: skip
         return windows
 
     # Collect listening history for each user
@@ -83,12 +83,11 @@ def extract_sequences(
         # Aggregate sessions to user history
         .group_by("uid", maintain_order=True)
         .agg([pl.struct(["session_id", "session_ts", "items"]).alias("all_sessions")])
-    )
+    )  # fmt: skip
 
     # Form sequences of sessions
     sequences = (
-        user_history
-        .with_columns(
+        user_history.with_columns(
             pl.col("all_sessions")
             .map_elements(_extract_sequences, return_dtype=sequence_schema)
             .alias("seq_data")
@@ -108,7 +107,7 @@ def extract_sequences(
 
         # Reorder columns
         .select(["uid", "target_ts", "context", "target"])
-    )
+    )  # fmt: skip
 
     if assign_index:
         # Assign sequence ID (globally unique)
