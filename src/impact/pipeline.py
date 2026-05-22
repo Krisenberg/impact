@@ -8,6 +8,7 @@ import polars as pl
 import structlog
 
 from impact.dataset import DatasetSize, DatasetType, InteractionType
+from impact.features import SequenceSplit
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -251,3 +252,59 @@ class DataPipeline:
         return pl.scan_parquet(
             sequences_dir / "sequences_part_*.parquet"
         ).with_row_index("sequence_idx", offset=1)
+
+    def get_splits(self, n_partitions: int = 1) -> SequenceSplit:
+        """Get final train/val/test splits, computing them if not cached (Step 4).
+
+        Args:
+            n_partitions: Number of partitions to process sequentially.
+        """
+        if n_partitions < 1:
+            raise ValueError("Number of partitions must be greater than 0.")
+
+        from impact.features import split_sequences_train_val_test
+
+        splits_dir = (
+            self.processed_dir
+            / self.config.sessionization_id
+            / self.config.sequencing_id
+            / self.config.timesplit_id
+        )
+        success_marker = splits_dir / "_SUCCESS"
+
+        # Atomicity check
+        if not success_marker.exists():
+            logger.info("No complete temporal splits found in cache, computing...")
+
+            # Clean up potentially corrupted partial runs
+            if splits_dir.exists():
+                shutil.rmtree(splits_dir)
+            splits_dir.mkdir(parents=True)
+
+            sequences_lf = self.get_sequences(n_partitions=n_partitions)
+
+            # No partitioning needed for train/val/test split
+            splits = split_sequences_train_val_test(
+                sequences_lf=sequences_lf,
+                test_days=self.config.test_days,
+                val_days=self.config.val_days,
+                gap_minutes=self.config.gap_minutes,
+            )
+
+            logger.info("Writing train split...")
+            splits.train.sink_parquet(splits_dir / "train.parquet")
+
+            logger.info("Writing validation split...")
+            splits.val.sink_parquet(splits_dir / "val.parquet")
+
+            logger.info("Writing test split...")
+            splits.test.sink_parquet(splits_dir / "test.parquet")
+
+            # Mark as completed
+            success_marker.touch()
+
+        return SequenceSplit(
+            train=pl.scan_parquet(splits_dir / "train.parquet"),
+            val=pl.scan_parquet(splits_dir / "val.parquet"),
+            test=pl.scan_parquet(splits_dir / "test.parquet"),
+        )
