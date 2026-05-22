@@ -11,6 +11,8 @@ dependencies = [
     "click>=8.4.0",
     "environ-config>=24.1.0",
     "huggingface-hub>=1.15.0",
+    "jinja2>=3.1.6",
+    "pandas>=3.0.3",
     "polars[rt64]>=1.40.1",
     "python-dotenv>=1.2.2",
     "structlog>=25.5.0",
@@ -21,6 +23,7 @@ dev = [
     "basedpyright>=1.39.4",
     "ipykernel>=7.2.0",
     "mypy>=2.1.0",
+    "pandas-stubs>=3.0.0.260204",
     "ruff>=0.15.13",
 ]
 
