@@ -16,10 +16,6 @@ dependencies = [
     "structlog>=25.5.0",
 ]
 
-[build-system]
-requires = ["uv_build>=0.11.0,<0.12.0"]
-build-backend = "uv_build"
-
 [dependency-groups]
 dev = [
     "basedpyright>=1.39.4",
@@ -27,6 +23,13 @@ dev = [
     "mypy>=2.1.0",
     "ruff>=0.15.13",
 ]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"
+
+[project.scripts]
+cli = "impact.main:cli"
 
 [tool.ruff]
 include = [
@@ -185,6 +188,7 @@ reportUnknownMemberType = false  # Suppress warnings from third-party libraries
 
 executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
+  { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/configuration.py", reportAny = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src/impact/features/sequences.py", reportExplicitAny = false },
