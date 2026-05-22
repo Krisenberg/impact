@@ -28,10 +28,10 @@ class PipelineConfig:
     dataset_type: DatasetType = DatasetType.FLAT
     """Dataset format type. Currently only FLAT is supported."""
     interaction_type: InteractionType = InteractionType.MULTI_EVENT
-    """Interaction file to load.
+    """Type of interactions to load from the Yambda dataset.
 
     MULTI_EVENT includes all event types (listen, like, etc.); other variants contain
-    only a subset.
+    only a specific subset.
     """
 
     # === Sessions ===
