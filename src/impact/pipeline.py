@@ -71,6 +71,11 @@ class PipelineConfig:
         if self.dataset_type != DatasetType.FLAT:
             raise ValueError(f"Dataset type {self.dataset_type} not supported.")
 
+    @staticmethod
+    def _format_float_value(val: float) -> str:
+        """Format float values to be filesystem-friendly (no dots)."""
+        return f"{int(val)}" if val.is_integer() else str(val).replace(".", "-")
+
     @property
     def dataset_id(self) -> str:
         """Cache key for the raw data fetching stage."""
@@ -103,11 +108,14 @@ class PipelineConfig:
     @property
     def timesplit_id(self) -> str:
         """Cache key for the temporal split (GTS) stage (Algorithm 3 in the thesis)."""
+        val_str = self._format_float_value(self.val_days)
+        test_str = self._format_float_value(self.test_days)
+        gap_str = self._format_float_value(self.gap_minutes)
         return "_".join([
-            "timesplit",
-            f"val{self.val_days}d",
-            f"test{self.test_days}d",
-            f"gap{self.gap_minutes}m",
+            "split",
+            f"val{val_str}d",
+            f"test{test_str}d",
+            f"gap{gap_str}m",
         ])  # fmt: skip
 
     @property
