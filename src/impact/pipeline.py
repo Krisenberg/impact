@@ -78,7 +78,7 @@ class PipelineConfig:
             self.dataset_size,
             self.dataset_type,
             self.interaction_type,
-        ])
+        ])  # fmt: skip
 
     @property
     def sessionization_id(self) -> str:
@@ -88,7 +88,7 @@ class PipelineConfig:
             f"gap{self.inactivity_gap_seconds}",
             f"k{self.tracks_per_session}",
             f"min{self.min_listen_seconds}",
-        ])
+        ])  # fmt: skip
 
     @property
     def sequencing_id(self) -> str:
@@ -97,7 +97,7 @@ class PipelineConfig:
             "sequences",
             f"l{self.context_sessions}",
             f"step{self.step}",
-        ])
+        ])  # fmt: skip
 
     @property
     def timesplit_id(self) -> str:
@@ -107,7 +107,7 @@ class PipelineConfig:
             f"val{self.val_days}d",
             f"test{self.test_days}d",
             f"gap{self.gap_minutes}m",
-        ])
+        ])  # fmt: skip
 
     @property
     def run_id(self) -> str:
@@ -117,7 +117,7 @@ class PipelineConfig:
             self.sessionization_id,
             self.sequencing_id,
             self.timesplit_id,
-        ])
+        ])  # fmt: skip
 
 
 class DataPipeline:
@@ -162,23 +162,26 @@ class DataPipeline:
         )
         return fetcher.get_interactions(event_type=self.config.interaction_type)
 
-    def get_sessions(self) -> pl.LazyFrame:
-        """Get sessionized data, computing it if not cached (Step 2)."""
+    def get_sessions(self, n_partitions: int = 1) -> pl.LazyFrame:
+        """Get sessionized data, computing it if not cached (Step 2).
+
+        Args:
+            n_partitions: Number of partitions to process sequentially.
+        """
+        if n_partitions < 1:
+            raise ValueError("Number of partitions must be greater than 0.")
+
         from impact.dataset import extract_sessions
 
         sessions_dir = self.interim_dir / self.config.sessionization_id
         success_marker = sessions_dir / "_SUCCESS"
 
-        partitions_by_dataset_size: dict[DatasetSize, int] = {
-            DatasetSize.SIZE_50M: 1,
-            DatasetSize.SIZE_500M: 4,
-            DatasetSize.SIZE_5B: 32,
-        }
-        n_partitions = partitions_by_dataset_size[self.config.dataset_size]
-
         # Atomicity check
         if not success_marker.exists():
-            logger.info("No complete sessionized data found in cache, computing...")
+            logger.info(
+                "No complete sessionized data found in cache, computing...",
+                partitions=n_partitions,
+            )
 
             # Clean up potentially corrupted partial runs
             if sessions_dir.exists():
@@ -200,3 +203,51 @@ class DataPipeline:
             success_marker.touch()
 
         return pl.scan_parquet(sessions_dir / "sessions_part_*.parquet")
+
+    def get_sequences(self, n_partitions: int = 1) -> pl.LazyFrame:
+        """Get extracted sequences of sessions, computing them if not cached (Step 3).
+
+        Args:
+            n_partitions: Number of partitions to process sequentially.
+        """
+        if n_partitions < 1:
+            raise ValueError("Number of partitions must be greater than 0.")
+
+        from impact.features import extract_sequences
+
+        sequences_dir = (
+            self.interim_dir / self.config.sessionization_id / self.config.sequencing_id
+        )
+        success_marker = sequences_dir / "_SUCCESS"
+
+        # Atomicity check
+        if not success_marker.exists():
+            logger.info(
+                "No complete sequenced data found in cache, computing...",
+                partitions=n_partitions,
+            )
+
+            # Clean up potentially corrupted partial runs
+            if sequences_dir.exists():
+                shutil.rmtree(sequences_dir)
+            sequences_dir.mkdir(parents=True)
+
+            sessions_lf = self.get_sessions(n_partitions=n_partitions)
+
+            for i in range(n_partitions):
+                logger.info("Computing partition", partition=i + 1, total=n_partitions)
+
+                extract_sequences(
+                    sessions_lf=sessions_lf.filter(pl.col("uid") % n_partitions == i),
+                    context_sessions=self.config.context_sessions,
+                    step=self.config.step,
+                    assign_index=False,  # Assign global index after merging
+                ).sink_parquet(sequences_dir / f"sequences_part_{i}.parquet")
+
+            # Mark as completed
+            success_marker.touch()
+
+        # Assign global index
+        return pl.scan_parquet(
+            sequences_dir / "sequences_part_*.parquet"
+        ).with_row_index("sequence_idx", offset=1)
