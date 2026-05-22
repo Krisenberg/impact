@@ -14,6 +14,16 @@ install *ARGS: _uv
 sync: _uv
     uv sync
 
+# Check code style and formatting (no fixes applied)
+lint: _uv
+    uv run ruff check --no-fix
+    uv run ruff format --diff
+
+# Run static type checkers
+typecheck: _uv
+    uv run mypy --config-file pyproject.toml
+    uv run basedpyright --stats
+
 # Recursively remove cache and .pyc/.pyo files
 cleanup:
     @find . -regextype posix-extended -regex '.*(__pycache__|\.py[co])$$' -delete
