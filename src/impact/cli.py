@@ -13,9 +13,10 @@ if TYPE_CHECKING:
 
 
 def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
-    """Inject PipelineConfig fields as Click options and pass the instance as `config`.
+    """Inject PipelineConfig fields as Click options and pass the instantiated config.
 
-    The decorated function must accept `config: PipelineConfig` as a keyword argument.
+    The decorated function must accept `pipeline_config: PipelineConfig` as a keyword
+    argument.
     """
     # Define all click options, matching the defaults from PipelineConfig
     options = [
@@ -42,10 +43,9 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
             default=InteractionType.MULTI_EVENT.value,
             show_default=True,
             help="""
-                Type of interactions to load from the Yambda dataset.
-
-                multi_event includes all event types (listen, like, etc.); other
-                variants contain only a specific subset.
+                Type of interactions to load from the Yambda dataset. multi_event
+                includes all event types (listen, like, etc.); other variants contain
+                only a specific subset.
             """,
         ),
         click.option(
@@ -64,7 +64,6 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
             show_default=True,
             help="""
                 Number of tracks that consitute a session. Denoted as K in the thesis.
-
                 Sessions with less than K tracks are discarded. Sessions with more than
                 K tracks are truncated.
             """,
@@ -76,9 +75,8 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
             show_default=True,
             help="""
                 Minimum playback duration (in seconds) to consider an event as a valid
-                listen.
-
-                Defaults to 30 (industry standard used by authors of other papers).
+                listen. Defaults to 30 (industry standard used by authors of other
+                publications).
             """,
         ),
         click.option(
@@ -123,10 +121,8 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
             default=30.0,
             show_default=True,
             help="""
-                Buffer time (in minutes) between dataset splits.
-
-                The purpose of this parameter is to mimic production system deployment
-                latency.
+                Buffer time (in minutes) between dataset splits. The purpose of this
+                parameter is to mimic production system deployment latency.
             """,
         ),
     ]
@@ -154,9 +150,9 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
             else:
                 config_kwargs[field.name] = kwargs.pop(field.name)
 
-        config = PipelineConfig(**config_kwargs)
+        pipeline_config = PipelineConfig(**config_kwargs)
 
         # Inject the config object and forward remaining CLI options
-        return f(*args, config=config, **kwargs)
+        return f(*args, pipeline_config=pipeline_config, **kwargs)
 
     return _wrapper
