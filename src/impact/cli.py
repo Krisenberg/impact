@@ -23,7 +23,8 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
         click.option(
             "--dataset-size",
             type=click.Choice([e.value for e in DatasetSize]),
-            required=True,
+            default=DatasetSize.SIZE_50M.value,
+            show_default=True,
             help="""
                 Yambda dataset variant to process (50M, 500M, or 5B).
             """,
