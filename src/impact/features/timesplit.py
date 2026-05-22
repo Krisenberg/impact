@@ -24,8 +24,8 @@ class SequenceSplit(NamedTuple):
 
 def split_sequences_train_val_test(
     sequences_lf: pl.LazyFrame,
-    val_days: float = 1.0,
     test_days: float = 1.0,
+    val_days: float = 1.0,
     gap_minutes: float = 30.0,
 ) -> SequenceSplit:
     """Split sequences into train, val, and test sets using temporal boundaries (GTS).
@@ -37,9 +37,9 @@ def split_sequences_train_val_test(
     Args:
         sequences_lf: LazyFrame representing user-scoped sequences of sessions, as
             produced by `sequences.extract_sequences`.
-        val_days: Number of days allocated to the validation set.
-        test_days: Number of days allocated to the test set.
-        gap_minutes: Duration (in minutes) of the gap between splits that mimics
+        test_days: Number of days at the end of the timeline allocated for the test set.
+        val_days: Number of days preceding test set allocated for the validation set.
+        gap_minutes: Buffer time (in minutes) between dataset splits that mimics
             production system deployment latency.
 
     Returns:

@@ -20,12 +20,12 @@ def extract_sequences(
     followed by a single target session used for model evaluation.
 
     Args:
-        sessions_lf: Sessionized LazyFrame of 'listen' events and a session_id column
-            with assigned ID of the session that each event belongs to, as produced by
-            `dataset.extract_sessions()`.
-        context_sessions: Number of context sessions per sequence. Denoted as L in the
-            thesis.
-        step: Sliding window step size.
+        sessions_lf: Sessionized LazyFrame of 'listen' events with a session_id column
+            that contains assigned ID of the session that each event belongs to, as
+            produced by `dataset.extract_sessions()`.
+        context_sessions: Number of historical sessions used as context. Denoted as L in
+            the thesis.
+        step: Step size for the sliding window sequence generation.
         assign_index: Whether to assign a globally unique sequence index. Should be set
             to False when processing partitioned data, as the index must be assigned
             after merging all partitions to ensure global uniqueness.

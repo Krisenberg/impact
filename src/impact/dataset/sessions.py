@@ -21,9 +21,9 @@ def extract_sessions(
         tracks_per_session: Number of tracks that consitute a session. Denoted as K in
             the thesis. Sessions with less than K tracks are discarded. Sessions with
             more than K tracks are truncated. Defaults to 10.
-        min_listen_seconds: Minimum number of seconds a track must have been played
-            to be considered as a valid listening event. Defaults to 30 (industry
-            standard used by authors of other publications).
+        min_listen_seconds: Minimum playback duration (in seconds) to consider an event
+            as a valid listen. Defaults to 30 (industry standard used by authors of
+            other publications).
 
     Returns:
         A Polars LazyFrame extending the events_lf by the session_id column containing
