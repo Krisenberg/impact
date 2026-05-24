@@ -28,6 +28,10 @@ typecheck: _uv
 run *ARGS: _uv
     uv run cli {{ARGS}}
 
+# Run the scripts/tables.py CLI
+thesis-tables *ARGS: _uv
+    uv run scripts/tables.py {{ARGS}}
+
 # Recursively remove cache and .pyc/.pyo files
 cleanup:
     @find . -regextype posix-extended -regex '.*(__pycache__|\.py[co])$$' -delete
