@@ -14,6 +14,7 @@ dependencies = [
     "jinja2>=3.1.6",
     "pandas>=3.0.3",
     "polars[rt64]>=1.40.1",
+    "pyarrow>=24.0.0",
     "python-dotenv>=1.2.2",
     "structlog>=25.5.0",
 ]
@@ -191,6 +192,7 @@ reportUnknownMemberType = false  # Suppress warnings from third-party libraries
 
 executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
+  { root = "scripts/tables.py", reportAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/configuration.py", reportAny = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
