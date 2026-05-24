@@ -153,6 +153,30 @@ class PipelineConfig:
             },
         }
 
+    def write_yaml(self, output_path: Path) -> None:
+        """Write the configuration to a YAML file.
+
+        Args:
+            output_path: Target path where the YAML file with the configuration snapshot
+                should be saved.
+        """
+        import yaml
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Prepend the unique run_id at the top of the file
+        header_comment = f"# run_id: {self.run_id}\n\n"
+
+        with output_path.open("w", encoding="utf-8") as f:
+            _ = f.write(header_comment)
+            yaml.dump(
+                data=self.to_dict(),
+                stream=f,
+                default_flow_style=False,
+                sort_keys=False,  # Prevents from sorting keys alphabetically
+                allow_unicode=True,
+            )
+
 
 class DataPipeline:
     """Orchestrates IMPACT data processing with a cache-aware API.
