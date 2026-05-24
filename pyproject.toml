@@ -16,6 +16,7 @@ dependencies = [
     "polars[rt64]>=1.40.1",
     "pyarrow>=24.0.0",
     "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.3",
     "structlog>=25.5.0",
 ]
 

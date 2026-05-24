@@ -388,6 +388,7 @@ dependencies = [
     { name = "polars", extra = ["rt64"] },
     { name = "pyarrow" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "structlog" },
 ]
 
@@ -410,6 +411,7 @@ requires-dist = [
     { name = "polars", extras = ["rt64"], specifier = ">=1.40.1" },
     { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "structlog", specifier = ">=25.5.0" },
 ]
 
