@@ -39,6 +39,15 @@ def cli() -> None:
     help="Language for the table headers and textual content (pl or en).",
 )
 @click.option(
+    "--output",
+    "-o",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="""
+        Output file path. Prints to stdout if not specified.
+    """,
+)
+@click.option(
     "--raw-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
@@ -66,15 +75,19 @@ def cli() -> None:
     """,
 )
 @inject_pipeline_config
-def data_funnel_stats_table(
+def generate_data_funnel_stats_table(
     pipeline_config: PipelineConfig,
     log_level: str,
     lang: str = "pl",
+    output: Path | None = None,
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
     processed_data_dir: Path | None = None,
 ) -> None:
-    """Generate LaTeX table showing data flow statistics across 2 dataset variants."""
+    """Generate a LaTeX table of record counts across data preparation stages.
+
+    Compares Yambda-50M and Yambda-5B dataset variants.
+    """
     configure_logging(
         level=logging.getLevelNamesMapping()[log_level],
     )  # Configure logging without piping logs to files
@@ -85,15 +98,15 @@ def data_funnel_stats_table(
             "raw": "Dane wejściowe ($E$)",
             "sessionized": "Sekwencja odsłuchów z identyfikatorem sesji ($S_{ses}$)",
             "sequenced": "Sekwencje sesji odsłuchowych ($S_{sek}$)",
-            "caption": "Liczebność danych po kolejnych etapach przygotowania zbioru eksperymentalnego.",  # noqa: E501
+            "caption": "Liczba rekordów po kolejnych etapach przygotowania zbioru eksperymentalnego.",  # noqa: E501
         },
-        # "en": {
-        #     "stage": "Processing Stage",
-        #     "raw": "Raw events",
-        #     "sessionized": "After sessionization ($K=10$)",
-        #     "sequenced": "Generated sequences ($L=20$)",
-        #     "caption": "Data processing funnel and temporal split statistics across Yambda dataset variants.",  # noqa: E501
-        # },
+        "en": {
+            "stage": "Data preparation stage",
+            "raw": "Raw data ($E$)",
+            "sessionized": "Listen events with session identifiers ($S_{ses}$)",
+            "sequenced": "Listening session sequences ($S_{sek}$)",
+            "caption": "Record counts across data preparation stages for the experimental dataset.",  # noqa: E501
+        },
     }
     t = translations[lang.lower()]
 
@@ -158,13 +171,17 @@ def data_funnel_stats_table(
             environment="table",
             position="H",
             position_float="centering",
-            label="tab:data_funnel_variants",
+            label="tab:data_funnel_stats",
             caption=" ".join(t["caption"].split()),
             column_format="lrr",  # 'l' for the text, 'r' for the numbers
         )
     )
 
-    click.echo(latex_output)
+    if output is None:
+        click.echo(latex_output)
+    else:
+        with click.open_file(output, "w") as f:
+            click.echo(latex_output, file=f)
 
 
 def _format_num(n: int) -> str:
