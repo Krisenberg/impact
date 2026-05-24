@@ -3,9 +3,9 @@
 import dataclasses
 import logging
 from pathlib import Path
+from typing import NamedTuple
 
 import click
-import pandas as pd
 import polars as pl
 import structlog
 
@@ -83,7 +83,7 @@ def data_funnel_stats_table(
         "pl": {
             "stage": "Etap przygotowania danych",
             "raw": "Dane wejściowe ($E$)",
-            "sessionized": "Sekwencja odsłuchów z przypisanym identyfikatorem sesji ($S_{ses}$)",  # noqa: E501
+            "sessionized": "Sekwencja odsłuchów z identyfikatorem sesji ($S_{ses}$)",
             "sequenced": "Sekwencje sesji odsłuchowych ($S_{sek}$)",
             "caption": "Liczebność danych po kolejnych etapach przygotowania zbioru eksperymentalnego.",  # noqa: E501
         },
@@ -105,42 +105,63 @@ def data_funnel_stats_table(
         config=pipeline_config,
     )
 
-    rows: list[dict[str, str | int]] = []
-    step_n_partitions_by_dataset_size: dict[DatasetSize, tuple[int, int]] = {
-        DatasetSize.SIZE_50M: (5, 1),
-        DatasetSize.SIZE_5B: (20, 32),
+    class VariantConfig(NamedTuple):
+        step: int
+        n_partitions: int
+        dataset_name: str  # Name of the dataset for the "reporting" (in the thesis)
+
+    variants: dict[DatasetSize, VariantConfig] = {
+        DatasetSize.SIZE_50M: VariantConfig(
+            step=5,
+            n_partitions=1,
+            dataset_name="Yambda-50M",
+        ),
+        DatasetSize.SIZE_5B: VariantConfig(
+            step=20,
+            n_partitions=32,
+            dataset_name="Yambda-5B",
+        ),
     }
-    for ds_size, (step, n_partitions) in step_n_partitions_by_dataset_size.items():
+
+    rows: list[dict[str, str | int]] = []
+    for ds_size, variant in variants.items():
         logger.info(f"Processing {ds_size.name} dataset variant")
         variant_config = dataclasses.replace(
             pipeline_config,
             dataset_size=ds_size,
-            step=step,
+            step=variant.step,
         )
         pipeline.config = variant_config  # Switch pipeline config
 
         events_lf = pipeline.get_raw_events()
-        sessions_lf = pipeline.get_sessions(n_partitions=n_partitions)
-        sequences_lf = pipeline.get_sequences(n_partitions=n_partitions)
+        sessions_lf = pipeline.get_sessions(n_partitions=variant.n_partitions)
+        sequences_lf = pipeline.get_sequences(n_partitions=variant.n_partitions)
 
         rows.append({
-            "dataset": ds_size.name,
+            "dataset": variant.dataset_name,
             "raw": _format_num(events_lf.select(pl.len()).collect().item()),
             "sessionized": _format_num(sessions_lf.select(pl.len()).collect().item()),
             "sequenced": _format_num(sequences_lf.select(pl.len()).collect().item()),
         })  # fmt: skip
 
-    df = pd.DataFrame(rows)
+    df = pl.DataFrame({
+        t["stage"]: [t["raw"], t["sessionized"], t["sequenced"]],
+        **{r["dataset"]: [r["raw"], r["sessionized"], r["sequenced"]] for r in rows}
+    })  # fmt: skip
 
     # Generate LaTeX table using Pandas Styler
-    latex_output = df.style.hide(axis="index").to_latex(
-        hrules=True,
-        environment="table",
-        position="H",
-        position_float="centering",
-        label="tab:data_funnel_variants",
-        caption=" ".join(t["caption"].split()),
-        column_format="lrrr",  # 'l' for the text, 'r' for the numbers
+    latex_output = (
+        df.to_pandas()
+        .style.hide(axis="index")
+        .to_latex(
+            hrules=True,
+            environment="table",
+            position="H",
+            position_float="centering",
+            label="tab:data_funnel_variants",
+            caption=" ".join(t["caption"].split()),
+            column_format="lrr",  # 'l' for the text, 'r' for the numbers
+        )
     )
 
     click.echo(latex_output)
