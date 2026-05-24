@@ -1,5 +1,6 @@
 """Orchestrator for the IMPACT data processing pipeline."""
 
+import hashlib
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,6 +128,30 @@ class PipelineConfig:
             self.sessionization_id,
             self.sequencing_id,
             self.timesplit_id,
+        ])  # fmt: skip
+
+    @property
+    def config_hash(self) -> str:
+        """SHA-256 hash of the full run_id."""
+        return hashlib.sha256(self.run_id.encode()).hexdigest()
+
+    @property
+    def display_id(self) -> str:
+        """Short human-readable ID, e.g. '5B-10K-20L-20S-a1b2c3d'.
+
+        Human-readable ID includes the following components:
+        - Dataset size, uppercased (50M, 500M, 5B),
+        - Tracks per session (K),
+        - Context sessions (L),
+        - Step size (S).
+        - Last 7 characters of the SHA-256 hash of the run_id (e.g. 'a1b2c3d').
+        """
+        return "-".join([
+            self.dataset_size.value.upper(),
+            f"{self.tracks_per_session}K",
+            f"{self.context_sessions}L",
+            f"{self.step}S",
+            self.config_hash[:7],
         ])  # fmt: skip
 
     def to_dict(self) -> dict[str, dict[str, Any]]:
