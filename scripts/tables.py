@@ -2,6 +2,7 @@
 
 import dataclasses
 import logging
+import string
 from pathlib import Path
 from typing import NamedTuple
 
@@ -39,12 +40,13 @@ def cli() -> None:
     help="Language for the table headers and textual content (pl or en).",
 )
 @click.option(
-    "--output",
+    "--out-dir",
     "-o",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=None,
+    type=click.Path(file_okay=False, path_type=Path),
+    required=False,
     help="""
-        Output file path. Prints to stdout if not specified.
+        Output directory for the LaTeX code and corresponding PipelineConfig YAML dumps.
+        Defaults to project root / 'reports' / 'tables' / 'data-funnel-stats'.
     """,
 )
 @click.option(
@@ -79,7 +81,7 @@ def generate_data_funnel_stats_table(
     pipeline_config: PipelineConfig,
     log_level: str,
     lang: str = "pl",
-    output: Path | None = None,
+    out_dir: Path | None = None,
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
     processed_data_dir: Path | None = None,
@@ -99,6 +101,10 @@ def generate_data_funnel_stats_table(
             "sessionized": "Sekwencja odsłuchów z identyfikatorem sesji ($S_{ses}$)",
             "sequenced": "Sekwencje sesji odsłuchowych ($S_{sek}$)",
             "caption": "Liczba rekordów po kolejnych etapach przygotowania zbioru eksperymentalnego.",  # noqa: E501
+            "reproducibility_note": (
+                "Konfiguracja IMPACT Framework: \\texttt{$display_id}~"
+                "(\\cref{$appendix_label})."
+            ),
         },
         "en": {
             "stage": "Data preparation stage",
@@ -106,6 +112,10 @@ def generate_data_funnel_stats_table(
             "sessionized": "Listen events with session identifiers ($S_{ses}$)",
             "sequenced": "Listening session sequences ($S_{sek}$)",
             "caption": "Record counts across data preparation stages for the experimental dataset.",  # noqa: E501
+            "reproducibility_note": (
+                "The IMPACT Framework configuration: \\texttt{$display_id}~"
+                "(\\cref{$appendix_label})."
+            ),
         },
     }
     t = translations[lang.lower()]
@@ -118,25 +128,33 @@ def generate_data_funnel_stats_table(
         config=pipeline_config,
     )
 
-    class VariantConfig(NamedTuple):
+    out_dir = out_dir or project_root / "reports" / "tables" / "data-funnel-stats"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    class _VariantConfig(NamedTuple):
         step: int
         n_partitions: int
         dataset_name: str  # Name of the dataset for the "reporting" (in the thesis)
+        marker: str  # Marker for the footnotes
 
-    variants: dict[DatasetSize, VariantConfig] = {
-        DatasetSize.SIZE_50M: VariantConfig(
+    variants: dict[DatasetSize, _VariantConfig] = {
+        DatasetSize.SIZE_50M: _VariantConfig(
             step=5,
             n_partitions=1,
             dataset_name="Yambda-50M",
+            marker="a",
         ),
-        DatasetSize.SIZE_5B: VariantConfig(
+        DatasetSize.SIZE_5B: _VariantConfig(
             step=20,
             n_partitions=32,
             dataset_name="Yambda-5B",
+            marker="b",
         ),
     }
 
     rows: list[dict[str, str | int]] = []
+    footnotes: list[str] = []
+
     for ds_size, variant in variants.items():
         logger.info(f"Processing {ds_size.name} dataset variant")
         variant_config = dataclasses.replace(
@@ -150,38 +168,57 @@ def generate_data_funnel_stats_table(
         sessions_lf = pipeline.get_sessions(n_partitions=variant.n_partitions)
         sequences_lf = pipeline.get_sequences(n_partitions=variant.n_partitions)
 
+        tnote = f"\\tnote{{\\hyperlink{{note:{variant.marker}}}{{{variant.marker}}}}}"
         rows.append({
-            "dataset": variant.dataset_name,
+            "dataset": f"{variant.dataset_name}{tnote}",
             "raw": _format_num(events_lf.select(pl.len()).collect().item()),
             "sessionized": _format_num(sessions_lf.select(pl.len()).collect().item()),
             "sequenced": _format_num(sequences_lf.select(pl.len()).collect().item()),
         })  # fmt: skip
+
+        hypertarget = f"\\hypertarget{{note:{variant.marker}}}{{{variant.marker}}}"
+        note_text = string.Template(t["reproducibility_note"]).substitute(
+            display_id=variant_config.display_id,
+            appendix_label=f"appendix:impactconfig:{variant_config.display_id}",
+        )
+        footnotes.append(f"\\item[{hypertarget}]: {note_text}")
+
+        config_dump_path = out_dir / f"{variant_config.display_id}.yaml"
+        variant_config.write_yaml(config_dump_path)
+        click.echo(f"Config dumped to {config_dump_path.as_posix()}")
 
     df = pl.DataFrame({
         t["stage"]: [t["raw"], t["sessionized"], t["sequenced"]],
         **{r["dataset"]: [r["raw"], r["sessionized"], r["sequenced"]] for r in rows}
     })  # fmt: skip
 
-    # Generate LaTeX table using Pandas Styler
+    tablenotes_latex = (
+        "\\begin{tablenotes}[flushleft]\n"
+        "\\footnotesize\n"
+        f"{'\n'.join(footnotes)}\n"
+        "\\end{tablenotes}\n"
+    )
     latex_output = (
         df.to_pandas()
         .style.hide(axis="index")
+        # Generate LaTeX table using Pandas Styler
         .to_latex(
             hrules=True,
-            environment="table",
+            environment="threeparttable",  # To allow table footnotes
             position="H",
             position_float="centering",
             label="tab:data_funnel_stats",
             caption=" ".join(t["caption"].split()),
             column_format="lrr",  # 'l' for the text, 'r' for the numbers
         )
+        .replace("\\end{tabular}\n", f"\\end{{tabular}}\n{tablenotes_latex}")
     )
 
-    if output is None:
-        click.echo(latex_output)
-    else:
-        with click.open_file(output, "w") as f:
-            click.echo(latex_output, file=f)
+    out_file = out_dir / "tab:data_funnel_stats.tex"
+    with click.open_file(out_file, "w") as f:
+        click.echo(latex_output, file=f)
+
+    click.echo(f"LaTeX table saved at {out_file.as_posix()}")
 
 
 def _format_num(n: int) -> str:
