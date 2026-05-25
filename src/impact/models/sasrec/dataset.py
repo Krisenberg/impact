@@ -26,20 +26,34 @@ class TrainSequenceSample:
     negatives: torch.Tensor
 
 
+@dataclass(frozen=True)
+class EvalSequenceSample:
+    """Immutable container representing a single evaluation sequence sample.
+
+    Attributes:
+        context: A 2D tensor of shape [L, K] holding item IDs from L context sessions.
+        target: A 1D tensor of shape [K] holding item IDs from the target session (L+1).
+    """
+
+    context: torch.Tensor
+    target: torch.Tensor
+
+
 class _BaseDataset[T](Dataset[T]):
-    """Abstract base dataset providing common initialization and path resolution."""
+    """Abstract base dataset providing common initialization and methods."""
 
     def __init__(self, lf: pl.LazyFrame) -> None:
         """Initialize the base dataset.
 
         Args:
-            lf: The preprocessed Polars LazyFrame containing sequence data.
+            lf: The Polars LazyFrame containing user-scoped sequences of sessions.
         """
         super().__init__()
         self._dataset: pl.DataFrame = lf.collect()  # For fast O(1) row lookups
 
     @property
     def dataset(self) -> pl.DataFrame:
+        """Polars DataFrame containing underlying dataset (materialized)."""
         return self._dataset
 
     def __len__(self) -> int:
@@ -81,3 +95,17 @@ class TrainDataset(_BaseDataset[TrainSequenceSample]):
             target=target_tensor,
             negatives=negatives_tensor,
         )
+
+
+class EvalDataset(_BaseDataset[EvalSequenceSample]):
+    """Dataset adjusted for model evaluation (validation and testing)."""
+
+    @override
+    def __getitem__(self, idx: int) -> EvalSequenceSample:
+        row = self._dataset.row(idx, named=True)
+        context_tensor = torch.tensor(
+            data=[session["items"] for session in row["context"]],
+            dtype=torch.long,
+        )
+        target_tensor = torch.tensor(data=row["target"]["items"], dtype=torch.long)
+        return EvalSequenceSample(context=context_tensor, target=target_tensor)
