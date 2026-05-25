@@ -1,8 +1,10 @@
 """Orchestrator for the IMPACT data processing pipeline."""
 
+import hashlib
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 import structlog
@@ -127,6 +129,73 @@ class PipelineConfig:
             self.sequencing_id,
             self.timesplit_id,
         ])  # fmt: skip
+
+    @property
+    def config_hash(self) -> str:
+        """SHA-256 hash of the full run_id."""
+        return hashlib.sha256(self.run_id.encode()).hexdigest()
+
+    @property
+    def display_id(self) -> str:
+        """Short human-readable ID, e.g. '5B-10K-20L-20S-a1b2c3d'.
+
+        Human-readable ID includes the following components:
+        - Dataset size, uppercased (50M, 500M, 5B),
+        - Tracks per session (K),
+        - Context sessions (L),
+        - Step size (S).
+        - Last 7 characters of the SHA-256 hash of the run_id (e.g. 'a1b2c3d').
+        """
+        return "-".join([
+            self.dataset_size.value.upper(),
+            f"{self.tracks_per_session}K",
+            f"{self.context_sessions}L",
+            f"{self.step}S",
+            self.config_hash[:7],
+        ])  # fmt: skip
+
+    def to_dict(self) -> dict[str, dict[str, Any]]:
+        """Serialize the flat configuration into a structured, nested dictionary."""
+        return {
+            "dataset": {
+                "dataset_size": self.dataset_size.value,
+                "dataset_type": self.dataset_type.value,
+                "interaction_type": self.interaction_type.value,
+            },
+            "sessions": {
+                "inactivity_gap_seconds": self.inactivity_gap_seconds,
+                "tracks_per_session": self.tracks_per_session,
+                "min_listen_seconds": self.min_listen_seconds,
+            },
+            "sequences": {
+                "context_sessions": self.context_sessions,
+                "step": self.step,
+            },
+            "timesplit": {
+                "test_days": self.test_days,
+                "val_days": self.val_days,
+                "gap_minutes": self.gap_minutes,
+            },
+        }
+
+    def write_yaml(self, output_path: Path) -> None:
+        """Write the configuration to a YAML file.
+
+        Args:
+            output_path: Target path where the YAML file with the configuration snapshot
+                should be saved.
+        """
+        import yaml
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
+            yaml.dump(
+                data=self.to_dict(),
+                stream=f,
+                default_flow_style=False,
+                sort_keys=False,  # Prevents from sorting keys alphabetically
+                allow_unicode=True,
+            )
 
 
 class DataPipeline:

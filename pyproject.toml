@@ -16,6 +16,7 @@ dependencies = [
     "polars[rt64]>=1.40.1",
     "pyarrow>=24.0.0",
     "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.3",
     "structlog>=25.5.0",
 ]
 
@@ -26,6 +27,7 @@ dev = [
     "mypy>=2.1.0",
     "pandas-stubs>=3.0.0.260204",
     "ruff>=0.15.13",
+    "types-pyyaml>=6.0.12.20260518",
 ]
 
 [build-system]
@@ -195,6 +197,7 @@ executionEnvironments = [
   { root = "scripts/tables.py", reportAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/configuration.py", reportAny = false },
+  { root = "src/impact/pipeline.py", reportExplicitAny = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src/impact/features/sequences.py", reportExplicitAny = false },
   { root = "src" },
