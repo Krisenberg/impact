@@ -188,12 +188,7 @@ class PipelineConfig:
         import yaml
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Prepend the unique run_id at the top of the file
-        header_comment = f"# run_id: {self.run_id}\n\n"
-
         with output_path.open("w", encoding="utf-8") as f:
-            _ = f.write(header_comment)
             yaml.dump(
                 data=self.to_dict(),
                 stream=f,
