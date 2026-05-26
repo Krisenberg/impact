@@ -36,9 +36,8 @@ class ParquetTable:
         """Parquet files lazily scanned into a LazyFrame."""
         return pl.scan_parquet(self.paths)
 
-    @property
-    def df(self) -> pl.DataFrame:
-        """Parquet files eagerly materialized into a DataFrame."""
+    def collect(self) -> pl.DataFrame:
+        """Materialize Parquet files eagerly into a DataFrame."""
         logger.warning(
             "Materializing Parquet table into RAM (might exceed available RAM)"
         )
