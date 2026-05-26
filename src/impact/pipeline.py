@@ -10,7 +10,7 @@ import polars as pl
 import structlog
 
 from impact.dataset import DatasetSize, DatasetType, InteractionType
-from impact.features import SequenceSplit
+from impact.schemas import ParquetTable, SequenceSplit
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -230,7 +230,7 @@ class DataPipeline:
         self.config: PipelineConfig = config
 
     def get_raw_events(self) -> pl.LazyFrame:
-        """Fetch raw interactions (Step 1)."""
+        """Fetch raw interactions."""
         from impact.dataset import YambdaFetcher
 
         fetcher = YambdaFetcher(
@@ -241,7 +241,7 @@ class DataPipeline:
         return fetcher.get_interactions(event_type=self.config.interaction_type)
 
     def get_sessions(self, n_partitions: int = 1) -> pl.LazyFrame:
-        """Get sessionized data, computing it if not cached (Step 2).
+        """Get sessionized data, computing it if not cached.
 
         Args:
             n_partitions: Number of partitions for sequential processing. Use >1 for
@@ -287,7 +287,7 @@ class DataPipeline:
         return pl.scan_parquet(sessions_dir / "sessions_part_*.parquet")
 
     def get_sequences(self, n_partitions: int = 1) -> pl.LazyFrame:
-        """Get extracted sequences of sessions, computing them if not cached (Step 3).
+        """Get extracted sequences of sessions, computing them if not cached.
 
         Args:
             n_partitions: Number of partitions for sequential processing. Use >1 for
@@ -340,7 +340,7 @@ class DataPipeline:
         ).with_row_index("sequence_idx", offset=1)
 
     def get_splits(self, n_partitions: int = 1) -> SequenceSplit:
-        """Get final train/val/test splits, computing them if not cached (Step 4).
+        """Get final train/val/test splits, computing them if not cached.
 
         Args:
             n_partitions: Number of partitions for sequential processing. Use >1 for
@@ -349,8 +349,6 @@ class DataPipeline:
         """
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
-
-        import tempfile
 
         from impact.features import split_sequences_train_val_test
 
@@ -361,6 +359,10 @@ class DataPipeline:
             / self.config.sequencing_id
             / self.config.timesplit_id
         )
+        item_to_idx_cache_dir = splits_dir / "item_to_idx"
+        train_cache_dir = splits_dir / "train"
+        val_cache_dir = splits_dir / "val"
+        test_cache_dir = splits_dir / "test"
         success_marker = splits_dir / "_SUCCESS"
 
         # Atomicity check
@@ -370,51 +372,50 @@ class DataPipeline:
             # Clean up potentially corrupted partial runs
             if splits_dir.exists():
                 shutil.rmtree(splits_dir)
-            splits_dir.mkdir(parents=True)
+
+            item_to_idx_cache_dir.mkdir(parents=True)
+            train_cache_dir.mkdir(parents=True)
+            val_cache_dir.mkdir(parents=True)
+            test_cache_dir.mkdir(parents=True)
 
             sequences_lf = self.get_sequences(n_partitions=n_partitions)
 
-            temp_dir: Path | None
-            if n_partitions > 1:
-                temp_dir = Path(tempfile.mkdtemp())
-                logger.info(
-                    "Created temp dir for partitioned processing",
-                    path=temp_dir.as_posix(),
-                )
-            else:
-                temp_dir = None
-
-            splits = split_sequences_train_val_test(
+            train_lf, val_lf, test_lf, item_to_idx_df = split_sequences_train_val_test(
                 sequences_lf=sequences_lf,
                 test_days=self.config.test_days,
                 val_days=self.config.val_days,
                 gap_minutes=self.config.gap_minutes,
                 n_partitions=n_partitions,
-                cache_dir=temp_dir,
             )
 
-            logger.info("Writing train split...")
-            splits.train.sink_parquet(splits_dir / "train.parquet")
+            if n_partitions == 1:
+                logger.info("Saving train_lf to a single Parquet file in cache...")
+                train_lf.sink_parquet(train_cache_dir / "part_all.parquet")
+            else:
+                logger.info("Saving train_lf to separate Parquet files in cache...")
+                for i in range(n_partitions):
+                    logger.info(f"Saving partition {i + 1}/{n_partitions}...")
+                    train_lf.filter(pl.col("uid") % n_partitions == i).sink_parquet(
+                        train_cache_dir / f"part_{i}.parquet"
+                    )
 
-            logger.info("Writing validation split...")
-            splits.val.sink_parquet(splits_dir / "val.parquet")
+            logger.info("Saving val_lf to a single Parquet file in cache...")
+            val_lf.sink_parquet(val_cache_dir / "part_all.parquet")
 
-            logger.info("Writing test split...")
-            splits.test.sink_parquet(splits_dir / "test.parquet")
+            logger.info("Saving test_lf to a single Parquet file in cache...")
+            test_lf.sink_parquet(test_cache_dir / "part_all.parquet")
 
-            logger.info("Writing item-to-index mapping...")
-            splits.item_to_idx.write_parquet(splits_dir / "item_to_idx.parquet")
-
-            if temp_dir is not None:
-                logger.info("Cleaning up temp dir...")
-                shutil.rmtree(temp_dir)
+            logger.info("Saving item_to_idx_df to a single Parquet file in cache...")
+            item_to_idx_df.write_parquet(item_to_idx_cache_dir / "part_all.parquet")
 
             # Mark as completed
             success_marker.touch()
+            logger.info("Temporal splits computed successfully")
 
+        pattern = "part_*.parquet" if n_partitions > 1 else "part_all.parquet"
         return SequenceSplit(
-            train=pl.scan_parquet(splits_dir / "train.parquet"),
-            val=pl.scan_parquet(splits_dir / "val.parquet"),
-            test=pl.scan_parquet(splits_dir / "test.parquet"),
-            item_to_idx=pl.read_parquet(splits_dir / "item_to_idx.parquet"),
+            train=ParquetTable(sorted(train_cache_dir.glob(pattern))),
+            val=ParquetTable(sorted(val_cache_dir.glob(pattern))),
+            test=ParquetTable(sorted(test_cache_dir.glob(pattern))),
+            item_to_idx=ParquetTable(sorted(item_to_idx_cache_dir.glob(pattern))),
         )
