@@ -4,7 +4,9 @@ Sequences of sessions (baskets in the NBR paradigm) are split using the GTS (Glo
 Temporal Split) strategy.
 """
 
+import shutil
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import cast
 
@@ -17,31 +19,56 @@ logger = structlog.stdlib.get_logger(__name__)
 
 
 @dataclass(frozen=True)
-class SequenceSplit:
-    """Container for train, validation, and test LazyFrames along with item mapping.
+class ParquetTable:
+    """Logical table backed by one or more Parquet files.
 
-    All three splits share a common item-to-index mapping derived from the train set.
-    Items unseen during training map to index 0 (padding/cold-start).
+    Supports both:
+    - single-file datasets
+    - partitioned datasets used for out-of-core processing
+
+    All the files specified in `paths` are treated as one logical table.
     """
 
-    train: pl.LazyFrame
-    val: pl.LazyFrame
-    test: pl.LazyFrame
-    item_to_idx: pl.DataFrame  # columns: item_id (UInt32), idx (UInt32, 1-based)
+    paths: list[Path]
+
+    @cached_property
+    def lf(self) -> pl.LazyFrame:
+        """Parquet files lazily scanned into a LazyFrame."""
+        return pl.scan_parquet(self.paths)
 
     @property
-    def num_items(self) -> int:
-        """Number of unique items in the train set (excludes padding index)."""
-        return self.item_to_idx.height
+    def df(self) -> pl.DataFrame:
+        """Parquet files eagerly materialized into a DataFrame."""
+        logger.warning(
+            "Materializing Parquet table into RAM (might exceed available RAM)"
+        )
+        return self.lf.collect()
+
+
+@dataclass(frozen=True)
+class SequenceSplit:
+    """Container for temporal dataset splits and their physical representations.
+
+    All splits and mappings are backed by deterministic, cached Parquet files.
+
+    Train, val and test splits share a common item-to-index mapping (1-based) derived
+    from the train set, available as item_to_idx. Items unseen during training map to
+    index 0.
+    """
+
+    train: ParquetTable
+    val: ParquetTable
+    test: ParquetTable
+    item_to_idx: ParquetTable  # columns: item_id (UInt32), idx (UInt32, 1-based)
 
 
 def split_sequences_train_val_test(
     sequences_lf: pl.LazyFrame,
+    cache_dir: Path,
     test_days: float = 1.0,
     val_days: float = 1.0,
     gap_minutes: float = 30.0,
     n_partitions: int = 1,
-    cache_dir: Path | None = None,
 ) -> SequenceSplit:
     """Split sequences into train, val, and test sets using temporal boundaries (GTS).
 
@@ -59,6 +86,10 @@ def split_sequences_train_val_test(
     Args:
         sequences_lf: LazyFrame representing user-scoped sequences of sessions, as
             produced by `sequences.extract_sequences()`.
+        cache_dir: Directory used to store cached Parquet files for train, val, test
+            splits and item mappings. Required because all returned datasets are
+            file-backed (`ParquetTable`). When `n_partitions > 1`, it is additionally
+            used for out-of-core partitioned processing.
         test_days: Number of days at the end of the timeline allocated for the test set.
         val_days: Number of days preceding test set allocated for the validation set.
         gap_minutes: Buffer time (in minutes) between dataset splits that mimics
@@ -66,19 +97,14 @@ def split_sequences_train_val_test(
         n_partitions: Number of partitions for sequential processing. Use >1 for
             large datasets that exceed available RAM (data is partitioned by user,
             i.e. uid column).
-        cache_dir: Directory used to store intermediate partition files during
-            partitioned processing (when `n_partitions > 1`). Ignored when
-            `n_partitions == 1`.
 
     Returns:
-        SequenceSplit containing train, validation, and test LazyFrames and the
-        item_to_idx DataFrame.
+        SequenceSplit containing file-backed train, val and test splits together with
+        the shared item-to-index mapping. Each split is represented as a `ParquetTable`
+        backed by one or more cached Parquet files.
     """
     if n_partitions < 1:
         raise ValueError("Number of partitions must be greater than 0.")
-
-    if n_partitions > 1 and cache_dir is None:
-        raise ValueError("Cache directory must be provided for partitioned processing.")
 
     logger.info(
         "Executing Global Temporal Split (GTS) to create train, val, and test sets",
@@ -124,36 +150,10 @@ def split_sequences_train_val_test(
     logger.info("Filtering sequences for the train set")
     raw_train_lf = sequences_lf.filter(pl.col("target_ts") < train_end_ts)
 
-    def _get_unique_items_per_part(part_lf: pl.LazyFrame) -> pl.DataFrame:
-        return (
-            pl.concat([
-                part_lf.select(
-                    pl.col("target")
-                    .struct.field("items")
-                    .explode()
-                    .alias("item_id")
-                ),
-                part_lf.select(
-                    pl.col("context")
-                    .explode()
-                    .struct.field("items")
-                    .explode()
-                    .alias("item_id")
-                ),
-            ])
-            .drop_nulls()
-            .unique()
-            .collect()
-        )  # fmt: skip
-
     logger.info("Generating item_id -> index mapping from the train set")
     item_to_idx_df: pl.DataFrame
     if n_partitions == 1:
-        item_to_idx_df = (
-            _get_unique_items_per_part(raw_train_lf)
-            .sort("item_id")
-            .with_columns(pl.int_range(1, pl.len() + 1, dtype=pl.UInt32).alias("idx"))
-        )
+        item_to_idx_df = _get_unique_items(raw_train_lf).sort("item_id")
     else:
         logger.info("Starting partitioned processing")
         unique_items_per_part: list[pl.DataFrame] = []
@@ -161,80 +161,158 @@ def split_sequences_train_val_test(
         for i in range(n_partitions):
             logger.info(f"Processing partition {i + 1}/{n_partitions}")
             part_lf = raw_train_lf.filter(pl.col("uid") % n_partitions == i)
-            unique_items_per_part.append(_get_unique_items_per_part(part_lf))
+            unique_items_per_part.append(_get_unique_items(part_lf))
 
         logger.info("Merging partitions and generating item_id -> index mapping")
-        item_to_idx_df = (
-            pl.concat(unique_items_per_part)
-            .unique()
-            .sort("item_id")
-            .with_columns(pl.int_range(1, pl.len() + 1, dtype=pl.UInt32).alias("idx"))
-        )
+        item_to_idx_df = pl.concat(unique_items_per_part).unique().sort("item_id")
+
+    if item_to_idx_df.is_empty():
+        raise ValueError("Train split produced no items.")
 
     old = item_to_idx_df.get_column("item_id").cast(pl.UInt32)
     new = item_to_idx_df.get_column("idx").cast(pl.UInt32)
 
-    def _map_item_ids(lf: pl.LazyFrame, old: pl.Series, new: pl.Series) -> pl.LazyFrame:
-        default = pl.lit(0, dtype=pl.UInt32)
-        return lf.with_columns([
-            # context: List(Struct({..., items: List(UInt32)}))
-            pl.col("context").list.eval(
-                pl.element().struct.with_fields(
-                    pl.field("items").list.eval(
-                        pl.element().replace_strict(old, new, default=default)
-                    )
-                )
-            ),
-            # target: Struct({..., items: List(UInt32)})
-            pl.col("target").struct.with_fields(
-                pl.field("items").list.eval(
-                    pl.element().replace_strict(old, new, default=default)
-                )
-            ),
-        ])  # fmt: skip
+    item_to_idx_cache_dir = _prepare_cache_dir(cache_dir / "item_to_idx")
+    item_to_idx_df.write_parquet(item_to_idx_cache_dir / "all.parquet")
+    item_to_idx_table = ParquetTable(sorted(item_to_idx_cache_dir.glob("all.parquet")))
 
     logger.info("Applying item_id -> index mapping to the train set")
-    train_lf: pl.LazyFrame
+    train_cache_dir = _prepare_cache_dir(cache_dir / "train")
     if n_partitions == 1:
-        train_lf = _map_item_ids(raw_train_lf, old, new)
+        _map_item_ids(raw_train_lf, old, new).sink_parquet(
+            train_cache_dir / "all.parquet"
+        )
+        train_table = ParquetTable(sorted(train_cache_dir.glob("all.parquet")))
     else:
         logger.info("Starting partitioned processing")
-        cache_dir = cast(Path, cache_dir)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
         for i in range(n_partitions):
             logger.info(f"Processing partition {i + 1}/{n_partitions}")
             (
                 raw_train_lf.filter(pl.col("uid") % n_partitions == i)
                 .pipe(_map_item_ids, old, new)
-                .sink_parquet(cache_dir / f"part_{i}.parquet")
+                .sink_parquet(train_cache_dir / f"part_{i}.parquet")
             )
 
         logger.info("Merging partitions (lazily!)")
-        train_lf = pl.scan_parquet(cache_dir / "part_*.parquet")
+        train_table = ParquetTable(sorted(train_cache_dir.glob("part_*.parquet")))
 
     # Identify valid users from the training set (not cold-start users)
     # Materialize them for optimized joining
-    unique_train_uids = train_lf.select("uid").unique().collect()
+    unique_train_uids = train_table.lf.select("uid").unique().collect()
 
     # Validation split
     logger.info("Creating validation set")
-    val_lf = (
+    val_cache_dir = _prepare_cache_dir(cache_dir / "val")
+    (
         sequences_lf.filter(
             (pl.col("target_ts") >= val_start_ts) & (pl.col("target_ts") < val_end_ts)
         )
         # Prevent cold-start by keeping only users present in the train set
         .join(unique_train_uids.lazy(), on="uid", how="inner")
         .pipe(_map_item_ids, old, new)
+        .sink_parquet(val_cache_dir / "all.parquet")
     )
+    val_table = ParquetTable(sorted(val_cache_dir.glob("all.parquet")))
 
     # Test split
     logger.info("Creating test set")
-    test_lf = (
+    test_cache_dir = _prepare_cache_dir(cache_dir / "test")
+    (
         sequences_lf.filter(pl.col("target_ts") >= test_start_ts)
         # Prevent cold-start by keeping only users present in the train set
         .join(unique_train_uids.lazy(), on="uid", how="inner")
         .pipe(_map_item_ids, old, new)
+        .sink_parquet(test_cache_dir / "all.parquet")
     )
+    test_table = ParquetTable(sorted(test_cache_dir.glob("all.parquet")))
 
-    return SequenceSplit(train_lf, val_lf, test_lf, item_to_idx_df)
+    return SequenceSplit(train_table, val_table, test_table, item_to_idx_table)
+
+
+def _prepare_cache_dir(path: Path) -> Path:
+    """Recreate a cache directory.
+
+    Existing directory contents are removed recursively before creating a new empty one.
+    """
+    if path.exists():
+        shutil.rmtree(path)
+
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _map_item_ids(
+    lf: pl.LazyFrame,
+    item_ids: pl.Series,
+    mapped_ids: pl.Series,
+) -> pl.LazyFrame:
+    """Map original item IDs to contiguous indices.
+
+    Replaces item identifiers inside both `context` and `target` structures using the
+    provided item-to-index mapping.
+
+    Expected schema:
+    - context: List(Struct({..., items: List(UInt32)}))
+    - target: Struct({..., items: List(UInt32)})
+
+    Items not present in the mapping are replaced with index 0.
+
+    Args:
+        lf: Input sequence dataset.
+        item_ids: Original item IDs.
+        mapped_ids: Corresponding contiguous indices.
+
+    Returns:
+        LazyFrame with remapped item identifiers.
+    """
+    default = pl.lit(0, dtype=pl.UInt32)
+    return lf.with_columns([
+        pl.col("context").list.eval(
+            pl.element().struct.with_fields(
+                pl.field("items").list.eval(
+                    pl.element().replace_strict(item_ids, mapped_ids, default=default)
+                )
+            )
+        ),
+        pl.col("target").struct.with_fields(
+            pl.field("items").list.eval(
+                pl.element().replace_strict(item_ids, mapped_ids, default=default)
+            )
+        ),
+    ])  # fmt: skip
+
+
+def _get_unique_items(lf: pl.LazyFrame) -> pl.DataFrame:
+    """Extract unique item IDs from nested sequence structures.
+
+    Reads item IDs from:
+    - target.items
+    - context[*].items
+    and returns unique values as `item_id`.
+
+    Args:
+        lf: Input sequence dataset.
+
+    Returns:
+        DataFrame containing unique item IDs in column `item_id`.
+    """
+    return (
+        pl.concat([
+            lf.select(
+                pl.col("target")
+                .struct.field("items")
+                .explode()
+                .alias("item_id")
+            ),
+            lf.select(
+                pl.col("context")
+                .explode()
+                .struct.field("items")
+                .explode()
+                .alias("item_id")
+            ),
+        ])
+        .drop_nulls()
+        .unique()
+        .collect()
+    )  # fmt: skip
