@@ -126,10 +126,11 @@ def main_pipeline(
     sequences_lf = pipeline.get_sequences(n_partitions=n_partitions)
     print(f"{ds_size} sequences_lf: {sequences_lf.select(pl.len()).collect().item()}")
 
-    train, val, test = pipeline.get_splits(n_partitions=n_partitions)
-    print(f"{ds_size} train: {train.select(pl.len()).collect().item()}")
-    print(f"{ds_size} val: {val.select(pl.len()).collect().item()}")
-    print(f"{ds_size} test: {test.select(pl.len()).collect().item()}")
+    splits = pipeline.get_splits(n_partitions=n_partitions)
+    print(f"{ds_size} train: {splits.train.select(pl.len()).collect().item()}")
+    print(f"{ds_size} val: {splits.val.select(pl.len()).collect().item()}")
+    print(f"{ds_size} test: {splits.test.select(pl.len()).collect().item()}")
+    print(f"{ds_size} item_to_idx: {splits.item_to_idx.height}")
 
     logger.info("IMPACT application completed")
 

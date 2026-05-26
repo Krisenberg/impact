@@ -350,6 +350,8 @@ class DataPipeline:
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
 
+        import tempfile
+
         from impact.features import split_sequences_train_val_test
 
         splits_dir = (
@@ -372,12 +374,23 @@ class DataPipeline:
 
             sequences_lf = self.get_sequences(n_partitions=n_partitions)
 
-            # No partitioning needed for train/val/test split
+            temp_dir: Path | None
+            if n_partitions > 1:
+                temp_dir = Path(tempfile.mkdtemp())
+                logger.info(
+                    "Created temp dir for partitioned processing",
+                    path=temp_dir.as_posix(),
+                )
+            else:
+                temp_dir = None
+
             splits = split_sequences_train_val_test(
                 sequences_lf=sequences_lf,
                 test_days=self.config.test_days,
                 val_days=self.config.val_days,
                 gap_minutes=self.config.gap_minutes,
+                n_partitions=n_partitions,
+                cache_dir=temp_dir,
             )
 
             logger.info("Writing train split...")
@@ -389,6 +402,13 @@ class DataPipeline:
             logger.info("Writing test split...")
             splits.test.sink_parquet(splits_dir / "test.parquet")
 
+            logger.info("Writing item-to-index mapping...")
+            splits.item_to_idx.write_parquet(splits_dir / "item_to_idx.parquet")
+
+            if temp_dir is not None:
+                logger.info("Cleaning up temp dir...")
+                shutil.rmtree(temp_dir)
+
             # Mark as completed
             success_marker.touch()
 
@@ -396,4 +416,5 @@ class DataPipeline:
             train=pl.scan_parquet(splits_dir / "train.parquet"),
             val=pl.scan_parquet(splits_dir / "val.parquet"),
             test=pl.scan_parquet(splits_dir / "test.parquet"),
+            item_to_idx=pl.read_parquet(splits_dir / "item_to_idx.parquet"),
         )

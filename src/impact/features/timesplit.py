@@ -5,6 +5,7 @@ Temporal Split) strategy.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 import polars as pl
@@ -39,6 +40,8 @@ def split_sequences_train_val_test(
     test_days: float = 1.0,
     val_days: float = 1.0,
     gap_minutes: float = 30.0,
+    n_partitions: int = 1,
+    cache_dir: Path | None = None,
 ) -> SequenceSplit:
     """Split sequences into train, val, and test sets using temporal boundaries (GTS).
 
@@ -55,16 +58,28 @@ def split_sequences_train_val_test(
 
     Args:
         sequences_lf: LazyFrame representing user-scoped sequences of sessions, as
-            produced by `sequences.extract_sequences`.
+            produced by `sequences.extract_sequences()`.
         test_days: Number of days at the end of the timeline allocated for the test set.
         val_days: Number of days preceding test set allocated for the validation set.
         gap_minutes: Buffer time (in minutes) between dataset splits that mimics
             production system deployment latency.
+        n_partitions: Number of partitions for sequential processing. Use >1 for
+            large datasets that exceed available RAM (data is partitioned by user,
+            i.e. uid column).
+        cache_dir: Directory used to store intermediate partition files during
+            partitioned processing (when `n_partitions > 1`). Ignored when
+            `n_partitions == 1`.
 
     Returns:
         SequenceSplit containing train, validation, and test LazyFrames and the
         item_to_idx DataFrame.
     """
+    if n_partitions < 1:
+        raise ValueError("Number of partitions must be greater than 0.")
+
+    if n_partitions > 1 and cache_dir is None:
+        raise ValueError("Cache directory must be provided for partitioned processing.")
+
     logger.info(
         "Executing Global Temporal Split (GTS) to create train, val, and test sets",
         val_days=val_days,
@@ -109,44 +124,94 @@ def split_sequences_train_val_test(
     logger.info("Filtering sequences for the train set")
     raw_train_lf = sequences_lf.filter(pl.col("target_ts") < train_end_ts)
 
+    def _get_unique_items_per_part(part_lf: pl.LazyFrame) -> pl.DataFrame:
+        return (
+            pl.concat([
+                part_lf.select(
+                    pl.col("target")
+                    .struct.field("items")
+                    .explode()
+                    .alias("item_id")
+                ),
+                part_lf.select(
+                    pl.col("context")
+                    .explode()
+                    .struct.field("items")
+                    .explode()
+                    .alias("item_id")
+                ),
+            ])
+            .drop_nulls()
+            .unique()
+            .collect()
+        )  # fmt: skip
+
     logger.info("Generating item_id -> index mapping from the train set")
-    target_items_lf = raw_train_lf.select(
-        pl.col("target").struct.field("items").explode().alias("item_id")
-    )
-    context_items_lf = raw_train_lf.select(
-        pl.col("context").explode().struct.field("items").explode().alias("item_id")
-    )
-    item_to_idx_df = (
-        pl.concat([target_items_lf, context_items_lf])
-        .drop_nulls()
-        .unique()
-        .sort("item_id")
-        .with_columns(pl.int_range(1, pl.len() + 1, dtype=pl.UInt32).alias("idx"))
-        .collect()
-    )
-    old = item_to_idx_df["item_id"]
-    new = item_to_idx_df["idx"]
+    item_to_idx_df: pl.DataFrame
+    if n_partitions == 1:
+        item_to_idx_df = (
+            _get_unique_items_per_part(raw_train_lf)
+            .sort("item_id")
+            .with_columns(pl.int_range(1, pl.len() + 1, dtype=pl.UInt32).alias("idx"))
+        )
+    else:
+        logger.info("Starting partitioned processing")
+        unique_items_per_part: list[pl.DataFrame] = []
+
+        for i in range(n_partitions):
+            logger.info(f"Processing partition {i + 1}/{n_partitions}")
+            part_lf = raw_train_lf.filter(pl.col("uid") % n_partitions == i)
+            unique_items_per_part.append(_get_unique_items_per_part(part_lf))
+
+        logger.info("Merging partitions and generating item_id -> index mapping")
+        item_to_idx_df = (
+            pl.concat(unique_items_per_part)
+            .unique()
+            .sort("item_id")
+            .with_columns(pl.int_range(1, pl.len() + 1, dtype=pl.UInt32).alias("idx"))
+        )
+
+    old = item_to_idx_df.get_column("item_id").cast(pl.UInt32)
+    new = item_to_idx_df.get_column("idx").cast(pl.UInt32)
 
     def _map_item_ids(lf: pl.LazyFrame, old: pl.Series, new: pl.Series) -> pl.LazyFrame:
+        default = pl.lit(0, dtype=pl.UInt32)
         return lf.with_columns([
             # context: List(Struct({..., items: List(UInt32)}))
             pl.col("context").list.eval(
                 pl.element().struct.with_fields(
-                    pl.col("items").list.eval(
-                        pl.element().replace_strict(old, new, default=0)
+                    pl.field("items").list.eval(
+                        pl.element().replace_strict(old, new, default=default)
                     )
                 )
             ),
             # target: Struct({..., items: List(UInt32)})
             pl.col("target").struct.with_fields(
-                pl.col("items").list.eval(
-                    pl.element().replace_strict(old, new, default=0)
+                pl.field("items").list.eval(
+                    pl.element().replace_strict(old, new, default=default)
                 )
             ),
         ])  # fmt: skip
 
     logger.info("Applying item_id -> index mapping to the train set")
-    train_lf = _map_item_ids(raw_train_lf, old, new)
+    train_lf: pl.LazyFrame
+    if n_partitions == 1:
+        train_lf = _map_item_ids(raw_train_lf, old, new)
+    else:
+        logger.info("Starting partitioned processing")
+        cache_dir = cast(Path, cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        for i in range(n_partitions):
+            logger.info(f"Processing partition {i + 1}/{n_partitions}")
+            (
+                raw_train_lf.filter(pl.col("uid") % n_partitions == i)
+                .pipe(_map_item_ids, old, new)
+                .sink_parquet(cache_dir / f"part_{i}.parquet")
+            )
+
+        logger.info("Merging partitions (lazily!)")
+        train_lf = pl.scan_parquet(cache_dir / "part_*.parquet")
 
     # Identify valid users from the training set (not cold-start users)
     # Materialize them for optimized joining
