@@ -4,11 +4,7 @@ Sequences of sessions (baskets in the NBR paradigm) are split using the GTS (Glo
 Temporal Split) strategy.
 """
 
-import shutil
-from dataclasses import dataclass
-from functools import cached_property
-from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 import polars as pl
 import structlog
@@ -18,65 +14,31 @@ from impact.constants import DAY_SECONDS, MINUTE_SECONDS
 logger = structlog.stdlib.get_logger(__name__)
 
 
-@dataclass(frozen=True)
-class ParquetTable:
-    """Logical table backed by one or more Parquet files.
+class SequenceSplitResult(NamedTuple):
+    """Container for computed dataset splits and item mapping.
 
-    Supports both:
-    - single-file datasets
-    - partitioned datasets used for out-of-core processing
-
-    All the files specified in `paths` are treated as one logical table.
+    Stores train, validation and test LazyFrames together with the item-to-index mapping
+    derived from the training set.
     """
 
-    paths: list[Path]
-
-    @cached_property
-    def lf(self) -> pl.LazyFrame:
-        """Parquet files lazily scanned into a LazyFrame."""
-        return pl.scan_parquet(self.paths)
-
-    def collect(self) -> pl.DataFrame:
-        """Materialize Parquet files eagerly into a DataFrame."""
-        logger.warning(
-            "Materializing Parquet table into RAM (might exceed available RAM)"
-        )
-        return self.lf.collect()
-
-
-@dataclass(frozen=True)
-class SequenceSplit:
-    """Container for temporal dataset splits and their physical representations.
-
-    All splits and mappings are backed by deterministic, cached Parquet files.
-
-    Train, val and test splits share a common item-to-index mapping (1-based) derived
-    from the train set, available as item_to_idx. Items unseen during training map to
-    index 0.
-    """
-
-    train: ParquetTable
-    val: ParquetTable
-    test: ParquetTable
-    item_to_idx: ParquetTable  # columns: item_id (UInt32), idx (UInt32, 1-based)
+    train: pl.LazyFrame
+    val: pl.LazyFrame
+    test: pl.LazyFrame
+    item_to_idx: pl.DataFrame
 
 
 def split_sequences_train_val_test(
     sequences_lf: pl.LazyFrame,
-    cache_dir: Path,
     test_days: float = 1.0,
     val_days: float = 1.0,
     gap_minutes: float = 30.0,
     n_partitions: int = 1,
-) -> SequenceSplit:
-    """Split sequences into train, val, and test sets using temporal boundaries (GTS).
+) -> SequenceSplitResult:
+    """Compute temporal train/validation/test splits with a global item-index mapping.
 
-    The split is determined strictly by the target_ts of the sequence, which represents
-    the timestamp of the target session in the sequence. It follows dual-gap strategy
-    from Yambda's benchmarking to mimic production deployment latency.
-
-    A contiguous item-to-index mapping (1-based) is derived from train-set items only
-    and applied uniformly to all splits, ensuring a shared evaluation ID space. Items
+    Splits are based on timestamp thresholds with a gap between train, validation, and
+    test windows. The item-to-index mapping is derived from the training set and applied
+    consistently across all splits, ensuring a shared evaluation ID space. Items
     appearing in val/test but absent in train are mapped to index 0.
 
     Val and test sets are further filtered only to users present in the train set to
@@ -85,10 +47,6 @@ def split_sequences_train_val_test(
     Args:
         sequences_lf: LazyFrame representing user-scoped sequences of sessions, as
             produced by `sequences.extract_sequences()`.
-        cache_dir: Directory used to store cached Parquet files for train, val, test
-            splits and item mappings. Required because all returned datasets are
-            file-backed (`ParquetTable`). When `n_partitions > 1`, it is additionally
-            used for out-of-core partitioned processing.
         test_days: Number of days at the end of the timeline allocated for the test set.
         val_days: Number of days preceding test set allocated for the validation set.
         gap_minutes: Buffer time (in minutes) between dataset splits that mimics
@@ -98,9 +56,8 @@ def split_sequences_train_val_test(
             i.e. uid column).
 
     Returns:
-        SequenceSplit containing file-backed train, val and test splits together with
-        the shared item-to-index mapping. Each split is represented as a `ParquetTable`
-        backed by one or more cached Parquet files.
+        SequenceSplitResult that stores train, validation and test LazyFrames together
+        with the item-to-index mapping derived from the training set.
     """
     if n_partitions < 1:
         raise ValueError("Number of partitions must be greater than 0.")
@@ -168,76 +125,51 @@ def split_sequences_train_val_test(
     if item_to_idx_df.is_empty():
         raise ValueError("Train split produced no items.")
 
-    old = item_to_idx_df.get_column("item_id").cast(pl.UInt32)
-    new = item_to_idx_df.get_column("idx").cast(pl.UInt32)
-
-    item_to_idx_cache_dir = _prepare_cache_dir(cache_dir / "item_to_idx")
-    item_to_idx_df.write_parquet(item_to_idx_cache_dir / "all.parquet")
-    item_to_idx_table = ParquetTable(sorted(item_to_idx_cache_dir.glob("all.parquet")))
+    item_ids = item_to_idx_df.get_column("item_id").cast(pl.UInt32)
+    mapped_ids = item_to_idx_df.get_column("idx").cast(pl.UInt32)
 
     logger.info("Applying item_id -> index mapping to the train set")
-    train_cache_dir = _prepare_cache_dir(cache_dir / "train")
     if n_partitions == 1:
-        _map_item_ids(raw_train_lf, old, new).sink_parquet(
-            train_cache_dir / "all.parquet"
-        )
-        train_table = ParquetTable(sorted(train_cache_dir.glob("all.parquet")))
+        train_lf = _map_item_ids(raw_train_lf, item_ids, mapped_ids)
     else:
         logger.info("Starting partitioned processing")
+        part_lfs: list[pl.LazyFrame] = []
         for i in range(n_partitions):
             logger.info(f"Processing partition {i + 1}/{n_partitions}")
-            (
-                raw_train_lf.filter(pl.col("uid") % n_partitions == i)
-                .pipe(_map_item_ids, old, new)
-                .sink_parquet(train_cache_dir / f"part_{i}.parquet")
+            part_lfs.append(
+                raw_train_lf.filter(pl.col("uid") % n_partitions == i).pipe(
+                    _map_item_ids, item_ids, mapped_ids
+                )
             )
 
         logger.info("Merging partitions (lazily!)")
-        train_table = ParquetTable(sorted(train_cache_dir.glob("part_*.parquet")))
+        train_lf = pl.concat(part_lfs)
 
     # Identify valid users from the training set (not cold-start users)
     # Materialize them for optimized joining
-    unique_train_uids = train_table.lf.select("uid").unique().collect()
+    unique_train_uids = train_lf.select("uid").unique().collect()
 
     # Validation split
     logger.info("Creating validation set")
-    val_cache_dir = _prepare_cache_dir(cache_dir / "val")
-    (
+    val_lf = (
         sequences_lf.filter(
             (pl.col("target_ts") >= val_start_ts) & (pl.col("target_ts") < val_end_ts)
         )
         # Prevent cold-start by keeping only users present in the train set
         .join(unique_train_uids.lazy(), on="uid", how="inner")
-        .pipe(_map_item_ids, old, new)
-        .sink_parquet(val_cache_dir / "all.parquet")
+        .pipe(_map_item_ids, item_ids, mapped_ids)
     )
-    val_table = ParquetTable(sorted(val_cache_dir.glob("all.parquet")))
 
     # Test split
     logger.info("Creating test set")
-    test_cache_dir = _prepare_cache_dir(cache_dir / "test")
-    (
+    test_lf = (
         sequences_lf.filter(pl.col("target_ts") >= test_start_ts)
         # Prevent cold-start by keeping only users present in the train set
         .join(unique_train_uids.lazy(), on="uid", how="inner")
-        .pipe(_map_item_ids, old, new)
-        .sink_parquet(test_cache_dir / "all.parquet")
+        .pipe(_map_item_ids, item_ids, mapped_ids)
     )
-    test_table = ParquetTable(sorted(test_cache_dir.glob("all.parquet")))
 
-    return SequenceSplit(train_table, val_table, test_table, item_to_idx_table)
-
-
-def _prepare_cache_dir(path: Path) -> Path:
-    """Recreate a cache directory.
-
-    Existing directory contents are removed recursively before creating a new empty one.
-    """
-    if path.exists():
-        shutil.rmtree(path)
-
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return SequenceSplitResult(train_lf, val_lf, test_lf, item_to_idx_df)
 
 
 def _map_item_ids(
