@@ -10,7 +10,7 @@ import polars as pl
 import structlog
 
 from impact.dataset import DatasetSize, DatasetType, InteractionType
-from impact.schemas import ParquetTable, SequenceSplit
+from impact.schemas import ParquetDataset, SequenceSplit
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -339,13 +339,20 @@ class DataPipeline:
             sequences_dir / "sequences_part_*.parquet"
         ).with_row_index("sequence_idx", offset=1)
 
-    def get_splits(self, n_partitions: int = 1) -> SequenceSplit:
+    def get_splits(
+        self,
+        n_partitions: int = 1,
+        compute_ram_fraction: float = 0.15,
+    ) -> SequenceSplit:
         """Get final train/val/test splits, computing them if not cached.
 
         Args:
             n_partitions: Number of partitions for sequential processing. Use >1 for
                 large datasets that exceed available RAM (data is partitioned by user,
                 i.e. uid column).
+            compute_ram_fraction: Fraction of available RAM allowed per processing
+                partition. It should be keept low (<=0.15) to account for memory spikes
+                during joins, explodes, and struct (non-streamable) Polars operations.
         """
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
@@ -380,42 +387,84 @@ class DataPipeline:
 
             sequences_lf = self.get_sequences(n_partitions=n_partitions)
 
-            train_lf, val_lf, test_lf, item_to_idx_df = split_sequences_train_val_test(
+            # Discard the result as it has to be recreated at the end either way
+            # (because of caching)
+            _ = split_sequences_train_val_test(
                 sequences_lf=sequences_lf,
+                train_dir=train_cache_dir,
+                val_dir=val_cache_dir,
+                test_dir=test_cache_dir,
+                item_to_idx_dir=item_to_idx_cache_dir,
                 test_days=self.config.test_days,
                 val_days=self.config.val_days,
                 gap_minutes=self.config.gap_minutes,
-                n_partitions=n_partitions,
+                compute_ram_fraction=compute_ram_fraction,
             )
-
-            if n_partitions == 1:
-                logger.info("Saving train_lf to a single Parquet file in cache...")
-                train_lf.sink_parquet(train_cache_dir / "part_all.parquet")
-            else:
-                logger.info("Saving train_lf to separate Parquet files in cache...")
-                for i in range(n_partitions):
-                    logger.info(f"Saving partition {i + 1}/{n_partitions}...")
-                    train_lf.filter(pl.col("uid") % n_partitions == i).sink_parquet(
-                        train_cache_dir / f"part_{i}.parquet"
-                    )
-
-            logger.info("Saving val_lf to a single Parquet file in cache...")
-            val_lf.sink_parquet(val_cache_dir / "part_all.parquet")
-
-            logger.info("Saving test_lf to a single Parquet file in cache...")
-            test_lf.sink_parquet(test_cache_dir / "part_all.parquet")
-
-            logger.info("Saving item_to_idx_df to a single Parquet file in cache...")
-            item_to_idx_df.write_parquet(item_to_idx_cache_dir / "part_all.parquet")
 
             # Mark as completed
             success_marker.touch()
             logger.info("Temporal splits computed successfully")
 
-        pattern = "part_*.parquet" if n_partitions > 1 else "part_all.parquet"
         return SequenceSplit(
-            train=ParquetTable(sorted(train_cache_dir.glob(pattern))),
-            val=ParquetTable(sorted(val_cache_dir.glob(pattern))),
-            test=ParquetTable(sorted(test_cache_dir.glob(pattern))),
-            item_to_idx=ParquetTable(sorted(item_to_idx_cache_dir.glob(pattern))),
+            train=ParquetDataset.from_dir(train_cache_dir),
+            val=ParquetDataset.from_dir(val_cache_dir),
+            test=ParquetDataset.from_dir(test_cache_dir),
+            item_to_idx=ParquetDataset.from_dir(item_to_idx_cache_dir),
         )
+
+    def _save_to_cache(
+        self,
+        data: pl.LazyFrame | pl.DataFrame,
+        cache_dir: Path,
+        storage_partitions: int = 1,
+    ) -> None:
+        """Write dataset to Parquet cache using predefined partitioning strategy.
+
+        The function persists the input dataset to disk either as a single Parquet file
+        or as multiple partitioned files, depending on the provided `storage_partitions`
+        parameter.
+
+        If multiple partitions are requested and the dataset contains a `uid` column,
+        data is split deterministically using a modulo-based partitioning strategy.
+        Otherwise, the dataset is written as a single Parquet file with a warning.
+
+        Args:
+            data: Dataset to be cached as Parquet files.
+            cache_dir: Directory where Parquet files will be saved.
+            storage_partitions: Number of storage partitions (number of Parquet files).
+        """
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(
+            "Saving dataset to cache",
+            cache_dir=cache_dir.as_posix(),
+            storage_partitions=storage_partitions,
+        )
+
+        if storage_partitions == 1:
+            path = cache_dir / "part_all.parquet"
+
+            logger.info("Writing to a single Parquet file...")
+            if isinstance(data, pl.LazyFrame):
+                data.sink_parquet(path)
+            else:
+                data.write_parquet(path)
+
+            return
+
+        lf = data.lazy() if isinstance(data, pl.DataFrame) else data
+        schema = lf.collect_schema()
+
+        if "uid" not in schema.names():
+            logger.warning(
+                "Partitioning by uid not available, trying to write to a single file..."
+            )
+            lf.sink_parquet(cache_dir / "part_all.parquet")
+            return
+
+        lf = lf.with_columns((pl.col("uid") % storage_partitions).alias("partition"))
+        for i in range(storage_partitions):
+            logger.info(f"Saving partition {i + 1}/{storage_partitions}...")
+            lf.filter(pl.col("partition") == i).collect().write_parquet(
+                cache_dir / f"part_{i}.parquet"
+            )
