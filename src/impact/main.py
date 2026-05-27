@@ -127,10 +127,17 @@ def main_pipeline(
     print(f"{ds_size} sequences_lf: {sequences_lf.select(pl.len()).collect().item()}")
 
     splits = pipeline.get_splits(n_partitions=n_partitions)
-    print(f"{ds_size} train: {splits.train.select(pl.len()).collect().item()}")
-    print(f"{ds_size} val: {splits.val.select(pl.len()).collect().item()}")
-    print(f"{ds_size} test: {splits.test.select(pl.len()).collect().item()}")
-    print(f"{ds_size} item_to_idx: {splits.item_to_idx.height}")
+    print(f"{ds_size} train: {splits.train.lf.select(pl.len()).collect().item()}")
+    print(f"{ds_size} val: {splits.val.lf.select(pl.len()).collect().item()}")
+    print(f"{ds_size} test: {splits.test.lf.select(pl.len()).collect().item()}")
+    item_to_idx_len = splits.item_to_idx.lf.select(pl.len()).collect().item()
+    print(f"{ds_size} item_to_idx: {item_to_idx_len}")
+
+    tensors = pipeline.tensorize(splits)
+    n, l, k = tensors.train.meta  # noqa: E741
+    print(f"{ds_size} train tensors: N={n}, L={l}, K={k}")
+    print(f"{ds_size} val tensors:   N={tensors.val.meta[0]}")
+    print(f"{ds_size} test tensors:  N={tensors.test.meta[0]}")
 
     logger.info("IMPACT application completed")
 
