@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
+import numpy as np
 import polars as pl
 import structlog
 
@@ -82,3 +83,74 @@ class SequenceSplit:
     val: ParquetDataset
     test: ParquetDataset
     item_to_idx: ParquetDataset  # columns: item_id (UInt32), idx (UInt32, 1-based)
+
+
+@dataclass(frozen=True)
+class MemmapDataset:
+    """Tensorized dataset backed by memory-mapped NumPy arrays.
+
+    Arrays are produced by `features.tensorize()` and intended for out-of-core PyTorch
+    training via `np.load(..., mmap_mode="r")`.
+
+    Use `from_dir()` to reconstruct from a directory containing the tensorized files,
+    ensuring filename consistency with the constants defined on this class.
+    """
+
+    _CONTEXT_FILE: ClassVar[str] = "context.npy"
+    _TARGET_FILE: ClassVar[str] = "target.npy"
+    _META_FILE: ClassVar[str] = "meta.npy"
+
+    directory: Path
+
+    @property
+    def meta_file_path(self) -> Path:
+        """Path to meta.npy file."""
+        return self.directory / self._META_FILE
+
+    @property
+    def context_file_path(self) -> Path:
+        """Path to context.npy file."""
+        return self.directory / self._CONTEXT_FILE
+
+    @property
+    def target_file_path(self) -> Path:
+        """Path to target.npy file."""
+        return self.directory / self._TARGET_FILE
+
+    @cached_property
+    def meta(self) -> tuple[int, int, int]:
+        """Tuple of (N, L, K) from meta.npy file."""
+        n, l, k = cast(tuple[int, int, int], np.load(self.meta_file_path))  # noqa: E741
+        return int(n), int(l), int(k)
+
+    @cached_property
+    def context(self) -> np.ndarray:
+        """Memory-mapped context array of shape [N, L, K]."""
+        return cast(np.ndarray, np.load(self.context_file_path, mmap_mode="r"))
+
+    @cached_property
+    def target(self) -> np.ndarray:
+        """Memory-mapped target array of shape [N, K]."""
+        return cast(np.ndarray, np.load(self.target_file_path, mmap_mode="r"))
+
+    @classmethod
+    def from_dir(cls, directory: Path) -> MemmapDataset:
+        """Reconstruct a MemmapDataset from a directory containing tensorized files.
+
+        Raises:
+            FileNotFoundError: If any of the expected array files are missing.
+        """
+        expected = {cls._CONTEXT_FILE, cls._TARGET_FILE, cls._META_FILE}
+        missing = expected - {f.name for f in directory.iterdir()}
+        if missing:
+            raise FileNotFoundError(f"Missing files in {directory}: {missing}")
+        return cls(directory)
+
+
+@dataclass(frozen=True)
+class MemmapSplit:
+    """Container for tensorized train/val/test splits."""
+
+    train: MemmapDataset
+    val: MemmapDataset
+    test: MemmapDataset
