@@ -1,34 +1,20 @@
 """Module defining PyTorch Datasets for sequence-based (NBR) music recommendation."""
 
-from dataclasses import dataclass
-from typing import TypeVar, override
+from __future__ import annotations
 
-import polars as pl
+from typing import TYPE_CHECKING, NamedTuple, override
+
 import torch
 from torch.utils.data import Dataset
 
-# Type variable representing the specific sequence sample type
-T = TypeVar("T")
+if TYPE_CHECKING:
+    import numpy as np
+
+    from impact.schemas import MemmapDataset
 
 
-@dataclass(frozen=True)
-class TrainSequenceSample:
-    """Immutable container representing a single training sequence sample.
-
-    Attributes:
-        context: A 2D tensor of shape [L, K] holding item IDs from L context sessions.
-        target: A 1D tensor of shape [K] holding item IDs from the target session (L+1).
-        negatives: A 1D tensor of shape [K] holding randomly sampled negative item IDs.
-    """
-
-    context: torch.Tensor
-    target: torch.Tensor
-    negatives: torch.Tensor
-
-
-@dataclass(frozen=True)
-class EvalSequenceSample:
-    """Immutable container representing a single evaluation sequence sample.
+class SequenceSample(NamedTuple):
+    """Immutable container representing a single sequence sample.
 
     Attributes:
         context: A 2D tensor of shape [L, K] holding item IDs from L context sessions.
@@ -39,73 +25,31 @@ class EvalSequenceSample:
     target: torch.Tensor
 
 
-class _BaseDataset[T](Dataset[T]):
-    """Abstract base dataset providing common initialization and methods."""
+class SequenceDataset(Dataset[SequenceSample]):
+    """PyTorch dataset over memory-mapped (context, target) sequence arrays.
 
-    def __init__(self, lf: pl.LazyFrame) -> None:
-        """Initialize the base dataset.
+    Wraps a MemmapDataset produced by `features.tensorize()` for use with DataLoader.
+    Samples are loaded lazily via mmap, so no data is held in RAM.
+    """
+
+    def __init__(self, dataset: MemmapDataset, num_items: int) -> None:
+        """Initialize the dataset.
 
         Args:
-            lf: The Polars LazyFrame containing user-scoped sequences of sessions.
+            dataset: Tensorized split with memory-mapped context and target arrays.
+            num_items: Total number of unique items (tracks) in the catalog. Used
+                downstream for negative sampling and embedding table sizing.
         """
-        super().__init__()
-        self._dataset: pl.DataFrame = lf.collect()  # For fast O(1) row lookups
-
-    @property
-    def dataset(self) -> pl.DataFrame:
-        """Polars DataFrame containing underlying dataset (materialized)."""
-        return self._dataset
-
-    def __len__(self) -> int:
-        """Return the total number of sequences."""
-        return self._dataset.height
-
-
-class TrainDataset(_BaseDataset[TrainSequenceSample]):
-    """Dataset adjusted for model training (includes negative sampling)."""
-
-    def __init__(self, dataset_lf: pl.LazyFrame, num_items: int) -> None:
-        super().__init__(dataset_lf)
+        self.context: np.ndarray = dataset.context  # [N, L, K]
+        self.target: np.ndarray = dataset.target  # [N, K]
         self.num_items: int = num_items
 
-    @override
-    def __getitem__(self, idx: int) -> TrainSequenceSample:
-        row = self._dataset.row(idx, named=True)
-
-        context_tensor = torch.tensor(
-            data=[session["items"] for session in row["context"]],
-            dtype=torch.long,
-        )
-
-        target_raw = row["target"]["items"]
-        target_tensor = torch.tensor(
-            data=row["target"]["items"],
-            dtype=torch.long,
-        )
-
-        negatives_tensor = torch.randint(
-            low=1,
-            high=self.num_items + 1,
-            size=(len(target_raw),),
-            dtype=torch.long,
-        )
-
-        return TrainSequenceSample(
-            context=context_tensor,
-            target=target_tensor,
-            negatives=negatives_tensor,
-        )
-
-
-class EvalDataset(_BaseDataset[EvalSequenceSample]):
-    """Dataset adjusted for model evaluation (validation and testing)."""
+    def __len__(self) -> int:
+        return len(self.target)
 
     @override
-    def __getitem__(self, idx: int) -> EvalSequenceSample:
-        row = self._dataset.row(idx, named=True)
-        context_tensor = torch.tensor(
-            data=[session["items"] for session in row["context"]],
-            dtype=torch.long,
+    def __getitem__(self, idx: int) -> SequenceSample:
+        return SequenceSample(
+            torch.from_numpy(self.context[idx].copy()).long(),
+            torch.from_numpy(self.target[idx].copy()).long(),
         )
-        target_tensor = torch.tensor(data=row["target"]["items"], dtype=torch.long)
-        return EvalSequenceSample(context=context_tensor, target=target_tensor)
