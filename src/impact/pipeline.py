@@ -10,7 +10,7 @@ import polars as pl
 import structlog
 
 from impact.dataset import DatasetSize, DatasetType, InteractionType
-from impact.schemas import ParquetDataset, SequenceSplit
+from impact.schemas import MemmapDataset, MemmapSplit, ParquetDataset, SequenceSplit
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -410,6 +410,67 @@ class DataPipeline:
             val=ParquetDataset.from_dir(val_cache_dir),
             test=ParquetDataset.from_dir(test_cache_dir),
             item_to_idx=ParquetDataset.from_dir(item_to_idx_cache_dir),
+        )
+
+    def tensorize(self, split: SequenceSplit) -> MemmapSplit:
+        """Tensorize a given SequenceSplit into memory-mapped NumPy arrays.
+
+        Converts each Parquet-backed split into dense [N, L, K] arrays suitable for
+        out-of-core PyTorch training. Results are cached under the pipeline's
+        `processed_dir`; subsequent calls with a complete cache skip recomputation.
+
+        Args:
+            split: Temporal dataset splits, as returned by `get_splits()`.
+
+        Returns:
+            MemmapSplit with memory-mapped train, val, and test arrays.
+        """
+        from impact.features import tensorize
+
+        tensors_dir = (
+            self.processed_dir
+            / self.config.dataset_id
+            / self.config.sessionization_id
+            / self.config.sequencing_id
+            / self.config.timesplit_id
+            / "tensors"
+        )
+        success_marker = tensors_dir / "_SUCCESS"
+
+        # Atomicity check
+        if not success_marker.exists():
+            logger.info("No complete tensorized splits found in cache, computing...")
+
+            # Clean up potentially corrupted partial runs
+            if tensors_dir.exists():
+                shutil.rmtree(tensors_dir)
+
+            dataset_by_name = {
+                "train": split.train,
+                "val": split.val,
+                "test": split.test,
+            }
+            for name, dataset in dataset_by_name.items():
+                out_dir = tensors_dir / name
+                out_dir.mkdir(parents=True)
+
+                # Discard the result as it has to be recreated at the end either way
+                # (because of caching)
+                _ = tensorize(
+                    dataset=dataset,
+                    out_dir=tensors_dir / name,
+                    tracks_per_session=self.config.tracks_per_session,
+                    context_sessions=self.config.context_sessions,
+                )
+
+            # Mark as completed
+            success_marker.touch()
+            logger.info("Tensorized splits computed successfully")
+
+        return MemmapSplit(
+            train=MemmapDataset.from_dir(tensors_dir / "train"),
+            val=MemmapDataset.from_dir(tensors_dir / "val"),
+            test=MemmapDataset.from_dir(tensors_dir / "test"),
         )
 
     def _save_to_cache(
