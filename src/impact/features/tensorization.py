@@ -20,6 +20,7 @@ def tensorize(
     out_dir: Path,
     tracks_per_session: int,  # K
     context_sessions: int,  # L
+    batch_size: int = 100_000,
 ) -> MemmapDataset:
     """Convert fixed-size sequences of listening session into mem-mapped NumPy tensors.
 
@@ -46,6 +47,10 @@ def tensorize(
         - every context sequence contains exactly L sessions
         - every session contains exactly K tracks
 
+    Parquet files are read in row batches rather than whole-file to bound peak RAM
+    consumption. Each batch is unpacked from Polars structs into Python lists, which
+    expands memory significantly relative to the on-disk size.
+
     Args:
         dataset: Partitioned Parquet dataset containing fixed-size listening sequences,
             as produced by the preprocessing pipeline.
@@ -54,6 +59,13 @@ def tensorize(
             the thesis.
         context_sessions: Number of historical sessions used as context. Denoted as L in
             the thesis.
+        batch_size: Number of rows processed per iteration when reading Parquet
+            partitions. Reducing this lowers peak RAM usage at the cost of more Python
+            loop iterations.
+
+    Returns:
+        MemmapDataset object representing tensorized dataset backed by memory-mapped
+        NumPy arrays (`context.npy`, `target.npy`, `meta.npy`).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     K, L = tracks_per_session, context_sessions  # noqa: N806
@@ -93,15 +105,20 @@ def tensorize(
     offset = 0
     for i, path in enumerate(dataset.paths, start=1):
         logger.info(f"Processing partition {i}/{len(dataset.paths)}", path=path)
-        df = pl.read_parquet(path)
-        contexts = df["context"].to_list()
-        targets = df["target"].to_list()
-        n = df.height
-        context_mm[offset : (offset + n)] = [
-            [session["items"] for session in context] for context in contexts
-        ]
-        target_mm[offset : (offset + n)] = [target["items"] for target in targets]
-        offset += n
+        partition_size = pl.scan_parquet(path).select(pl.len()).collect().item()
+
+        for j, batch in enumerate(pl.read_parquet(path).iter_slices(n_rows=batch_size)):
+            n = batch.height
+            batch_range = f"{j * batch_size} - {(j * batch_size) + n}"
+            logger.info(f"Tensorizing samples {batch_range} (out of {partition_size})")
+
+            contexts = batch["context"].to_list()
+            targets = batch["target"].to_list()
+            context_mm[offset : (offset + n)] = [
+                [session["items"] for session in context] for context in contexts
+            ]
+            target_mm[offset : (offset + n)] = [target["items"] for target in targets]
+            offset += n
 
     logger.info(
         "Tensorization complete, flushing memory-mapped arrays and saving metadata"
