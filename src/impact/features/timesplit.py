@@ -133,7 +133,9 @@ def split_sequences_train_val_test(
     _write_partitioned(
         data=item_to_idx_df,
         out_dir=item_to_idx_dir,
-        n_partitions=estimate_processing_partitions(item_to_idx_df),
+        n_partitions=estimate_processing_partitions(
+            item_to_idx_df, compute_ram_fraction
+        ),
         partition_over="idx",
     )
 
@@ -145,7 +147,7 @@ def split_sequences_train_val_test(
     _write_partitioned(
         data=train_lf,
         out_dir=train_dir,
-        n_partitions=estimate_processing_partitions(train_lf),
+        n_partitions=estimate_processing_partitions(train_lf, compute_ram_fraction),
         partition_over="uid",
         transform=mapper,
     )
@@ -170,7 +172,7 @@ def split_sequences_train_val_test(
     _write_partitioned(
         data=val_lf,
         out_dir=val_dir,
-        n_partitions=estimate_processing_partitions(val_lf),
+        n_partitions=estimate_processing_partitions(val_lf, compute_ram_fraction),
         partition_over="uid",
         transform=mapper,
     )
@@ -189,7 +191,7 @@ def split_sequences_train_val_test(
     _write_partitioned(
         data=test_lf,
         out_dir=test_dir,
-        n_partitions=estimate_processing_partitions(test_lf),
+        n_partitions=estimate_processing_partitions(test_lf, compute_ram_fraction),
         partition_over="uid",
         transform=mapper,
     )
