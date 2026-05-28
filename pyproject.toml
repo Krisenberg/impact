@@ -9,7 +9,6 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.4.0",
-    "environ-config>=24.1.0",
     "huggingface-hub>=1.15.0",
     "jinja2>=3.1.6",
     "pandas>=3.0.3",
@@ -183,8 +182,6 @@ exclude = [
 # ignore_missing_imports = true  # Ignore missing library stubs or py.typed markers from 3rd-party libraries
 
 [tool.basedpyright]
-venvPath = "."
-venv = ".venv"
 include = [                      # Scan and analyze given files or directories
     "scripts",
     "src",
@@ -198,6 +195,7 @@ pythonVersion = "3.12"           # Assume this Python version when type checking
 typeCheckingMode = "recommended" # Basedpyright-native strict mode
 reportMissingTypeStubs = false   # Don't error on third-party libraries without type stubs
 reportUnknownMemberType = false  # Suppress warnings from third-party libraries
+reportPrivateImportUsage = false # Assume that the user knows what they're doing
 
 executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
@@ -207,6 +205,7 @@ executionEnvironments = [
   { root = "src/impact/pipeline.py", reportExplicitAny = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src/impact/features/sequences.py", reportExplicitAny = false },
+  { root = "src/impact/features/tensorization.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/models/sasrec/dataset.py", reportAny = false },
   { root = "src" },
 ]
