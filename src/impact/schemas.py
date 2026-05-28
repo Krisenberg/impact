@@ -154,3 +154,4 @@ class MemmapSplit:
     train: MemmapDataset
     val: MemmapDataset
     test: MemmapDataset
+    num_items: int  # Number of unique items (tracks) in the catalog

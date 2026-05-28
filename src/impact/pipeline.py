@@ -4,7 +4,7 @@ import hashlib
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import polars as pl
 import structlog
@@ -471,6 +471,7 @@ class DataPipeline:
             train=MemmapDataset.from_dir(tensors_dir / "train"),
             val=MemmapDataset.from_dir(tensors_dir / "val"),
             test=MemmapDataset.from_dir(tensors_dir / "test"),
+            num_items=cast(int, split.item_to_idx.lf.select(pl.len()).collect().item()),
         )
 
     def _save_to_cache(
