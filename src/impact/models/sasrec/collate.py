@@ -14,9 +14,9 @@ class SequenceBatch(NamedTuple):
     """Batch of sequence samples with in-batch negative sampling.
 
     Attributes:
-        context:  Item IDs for L context sessions of shape [B, L, K].
-        positive: Item IDs for the target session of shape [B, K].
-        negative: Sampled negative item IDs of shape [B, K].
+        context:  Item indices for L context sessions of shape [B, L, K].
+        positive: Item indices for the target session of shape [B, K].
+        negative: Sampled negative item indices of shape [B, K].
     """
 
     context: torch.Tensor
