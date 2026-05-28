@@ -1,6 +1,9 @@
+"""Module for collating sequence samples into batches."""
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NamedTuple
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -10,7 +13,8 @@ if TYPE_CHECKING:
     from impact.models.sasrec.dataset import SequenceSample
 
 
-class SequenceBatch(NamedTuple):
+@dataclass(frozen=True)
+class SequenceBatch:
     """Batch of sequence samples with in-batch negative sampling.
 
     Attributes:
@@ -23,8 +27,16 @@ class SequenceBatch(NamedTuple):
     positive: torch.Tensor
     negative: torch.Tensor
 
+    def to(self, device: torch.device, non_blocking: bool = True) -> SequenceBatch:
+        """Move all tensors to the given device, returning a new SequenceBatch."""
+        return SequenceBatch(
+            context=self.context.to(device, non_blocking=non_blocking),
+            positive=self.positive.to(device, non_blocking=non_blocking),
+            negative=self.negative.to(device, non_blocking=non_blocking),
+        )
 
-def collate_fn(num_items: int) -> Callable[[list[SequenceSample]], SequenceBatch]:
+
+def get_collate_fn(num_items: int) -> Callable[[list[SequenceSample]], SequenceBatch]:
     """Return a collate function that assembles a SequenceBatch with sampled negatives.
 
     In the current implementation, negatives are sampled uniformly from [1, num_items]
