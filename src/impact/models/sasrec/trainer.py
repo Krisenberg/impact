@@ -7,6 +7,7 @@ from typing import cast, final
 import structlog
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from impact.evaluation.metrics import compute_ndcg_at_k, compute_recall_at_k
 from impact.models.sasrec.collate import SequenceBatch
@@ -73,7 +74,7 @@ class SASRecTrainer:
         )
 
         for epoch in range(1, max_epochs + 1):
-            train_loss = self._train_epoch()
+            train_loss = self._train_epoch(epoch)
             val_ndcg, val_recall = self._evaluate(self._val_loader)
 
             logger.info(
@@ -100,12 +101,17 @@ class SASRecTrainer:
                 )
                 break
 
-    def _train_epoch(self) -> float:
+    def _train_epoch(self, epoch: int) -> float:
         """Run a single training epoch and return mean loss over all batches."""
         _ = self._model.train()
         total_loss = 0.0
 
-        for batch in cast(Iterator[SequenceBatch], iter(self._train_loader)):
+        pbar = tqdm(
+            iterable=cast(Iterator[SequenceBatch], iter(self._train_loader)),
+            desc=f"Epoch {epoch}",
+            leave=False,
+        )
+        for batch in pbar:
             batch = batch.to(self._device)
 
             self._optimizer.zero_grad()

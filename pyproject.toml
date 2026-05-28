@@ -18,6 +18,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "structlog>=25.5.0",
     "torch>=2.12.0",
+    "tqdm>=4.67.3",
 ]
 
 [dependency-groups]
@@ -201,11 +202,12 @@ executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
   { root = "scripts/tables.py", reportAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
-  { root = "src/impact/config.py", reportAny = false },
+  { root = "src/impact/config.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/pipeline.py", reportExplicitAny = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src/impact/features/sequences.py", reportExplicitAny = false },
   { root = "src/impact/features/tensorization.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/models/sasrec/dataset.py", reportAny = false },
+  { root = "src/impact/models/sasrec/trainer.py", reportUnknownVariableType = false },
   { root = "src" },
 ]
