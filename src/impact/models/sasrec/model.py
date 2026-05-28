@@ -109,7 +109,7 @@ class SASRecNBR(nn.Module):
                 _ = nn.init.ones_(module.weight)
                 _ = nn.init.zeros_(module.bias)
 
-    def encode_context(self, context: torch.Tensor) -> torch.Tensor:
+    def encode(self, context: torch.Tensor) -> torch.Tensor:
         """Encode a batch of sequences of sessions into a single user intent vector.
 
         Item embeddings within each session are mean-pooled (padding-aware) to form
@@ -200,9 +200,9 @@ class SASRecNBR(nn.Module):
 
     @override
     def forward(self, context: torch.Tensor) -> torch.Tensor:
-        """Encode context into a user intent vector. See `encode_context()`.
+        """Encode context into a user intent vector. See `encode()`.
 
         Scoring is intentionally decoupled, use `score_items()` for training
         or `score_all_items()` for evaluation.
         """
-        return self.encode_context(context)
+        return self.encode(context)
