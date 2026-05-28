@@ -147,7 +147,13 @@ class SASRecNBR(nn.Module):
         session_vectors = cast(torch.Tensor, self._dropout(session_vectors))
 
         # Transformer self-attention processing
-        hidden_states = cast(torch.Tensor, self._transformer(session_vectors))
+        causal_mask = nn.Transformer.generate_square_subsequent_mask(
+            sz=seq_len, device=context.device
+        )
+        hidden_states = cast(
+            torch.Tensor,
+            self._transformer(session_vectors, mask=causal_mask, is_causal=True),
+        )
 
         # Extract the user representation (at index -1)
         return hidden_states[:, -1, :]  # [B, D]
