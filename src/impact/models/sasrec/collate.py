@@ -64,3 +64,18 @@ def get_collate_fn(num_items: int) -> Callable[[list[SequenceSample]], SequenceB
         return SequenceBatch(contexts, positives, negatives)
 
     return _collate
+
+
+def get_eval_collate_fn() -> Callable[[list[SequenceSample]], SequenceBatch]:
+    """Return a collate function for evaluation, omitting negative sampling.
+
+    The returned batch has an empty `negative` tensor, as evaluation scores against
+    the full item catalog either way.
+    """
+
+    def _collate(batch: list[SequenceSample]) -> SequenceBatch:
+        contexts = torch.stack([s.context for s in batch])
+        positives = torch.stack([s.target for s in batch])
+        return SequenceBatch(contexts, positives, torch.empty(0))
+
+    return _collate

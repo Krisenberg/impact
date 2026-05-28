@@ -15,6 +15,7 @@ from impact.models.sasrec import (
     SequenceDataset,
     SequenceSample,
     get_collate_fn,
+    get_eval_collate_fn,
 )
 
 if TYPE_CHECKING:
@@ -94,7 +95,7 @@ class SASRecTrainingPipeline:
             val_ds,
             batch_size=self._config.sasrec.batch_size,
             shuffle=False,
-            collate_fn=get_collate_fn(num_items),
+            collate_fn=get_eval_collate_fn(),
             num_workers=4,
             pin_memory=True,
             # worker_init_fn=seed_worker,
@@ -107,10 +108,10 @@ class SASRecTrainingPipeline:
         model = SASRecNBR(
             num_items=num_items,
             context_sessions=self._config.context_sessions,
-            # embedding_dim=self.config.embedding_dim,
-            # num_heads=self.config.num_heads,
-            # num_layers=self.config.num_layers,
-            # dropout=self.config.dropout_rate,
+            embedding_dim=self._config.sasrec.embedding_dim,
+            num_heads=self._config.sasrec.num_heads,
+            num_layers=self._config.sasrec.num_layers,
+            dropout=self._config.sasrec.dropout_rate,
         )
 
         optimizer = torch.optim.AdamW(
