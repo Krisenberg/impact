@@ -5,20 +5,20 @@ from typing import TYPE_CHECKING, Any
 
 import click
 
+from impact.config import ImpactConfig
 from impact.dataset import DatasetSize, DatasetType, InteractionType
-from impact.pipeline import PipelineConfig
 
 if TYPE_CHECKING:
     from enum import StrEnum
 
 
-def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
-    """Inject PipelineConfig fields as Click options and pass the instantiated config.
+def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
+    """Inject ImpactConfig fields as Click options and pass the instantiated config.
 
-    The decorated function must accept `pipeline_config: PipelineConfig` as a keyword
+    The decorated function must accept `impact_config: ImpactConfig` as a keyword
     argument.
     """
-    # Define all click options, matching the defaults from PipelineConfig
+    # Define all click options, matching the defaults from ImpactConfig
     options = [
         click.option(
             "--dataset-size",
@@ -134,14 +134,14 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
 
     @wraps(f)
     def _wrapper(*args: Any, **kwargs: Any) -> Any:
-        # Extract fields belonging to PipelineConfig
+        # Extract fields belonging to ImpactConfig
         config_kwargs: dict[str, Any] = {}
         enum_by_field_name: dict[str, type[StrEnum]] = {
             "dataset_size": DatasetSize,
             "dataset_type": DatasetType,
             "interaction_type": InteractionType,
         }
-        for field in dataclasses.fields(PipelineConfig):
+        for field in dataclasses.fields(ImpactConfig):
             if field.name not in kwargs:
                 continue
             if field.name in enum_by_field_name:
@@ -151,9 +151,9 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
             else:
                 config_kwargs[field.name] = kwargs.pop(field.name)
 
-        pipeline_config = PipelineConfig(**config_kwargs)
+        impact_config = ImpactConfig(**config_kwargs)
 
         # Inject the config object and forward remaining CLI options
-        return f(*args, pipeline_config=pipeline_config, **kwargs)
+        return f(*args, impact_config=impact_config, **kwargs)
 
     return _wrapper
