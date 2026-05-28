@@ -1,11 +1,33 @@
 """Module defining the IMPACT Framework configuration."""
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from impact.dataset import DatasetSize, DatasetType, InteractionType
+
+
+@dataclass(frozen=True)
+class SASRecConfig:
+    """Configuration for the SASRecNBR model."""
+
+    embedding_dim: int = 64
+    """Dimension of item and positional embeddings."""
+    num_heads: int = 2
+    """Number of attention heads in each Transformer layer."""
+    num_layers: int = 2
+    """Number of Transformer encoder layers."""
+    dropout_rate: float = 0.2
+    """Dropout probability applied after embedding and within each layer."""
+    batch_size: int = 2048
+    """Number of sequences per training batch."""
+    max_epochs: int = 100
+    """Maximum number of training epochs to run."""
+    learning_rate: float = 0.001
+    """Learning rate for the optimizer."""
+    patience: int = 10
+    """Number of epochs to wait for validation improvement before stopping."""
 
 
 @dataclass(frozen=True)
@@ -61,6 +83,14 @@ class ImpactConfig:
 
     The purpose of this parameter is to mimic production system deployment latency.
     """
+
+    # === SASRecNBR ===
+    sasrec: SASRecConfig = field(default_factory=SASRecConfig)
+    """Configuration for the SASRecNBR model."""
+
+    # === Seed for randomness ===
+    seed: int = 42
+    """Global random seed for strict reproducibility."""
 
     def __post_init__(self) -> None:
         """Verify that the selected dataset type is supported."""
@@ -169,6 +199,19 @@ class ImpactConfig:
                 "test_days": self.test_days,
                 "val_days": self.val_days,
                 "gap_minutes": self.gap_minutes,
+            },
+            "sasrecnbr_model": {
+                "embedding_dim": self.sasrec.embedding_dim,
+                "num_heads": self.sasrec.num_heads,
+                "num_layers": self.sasrec.num_layers,
+                "dropout_rate": self.sasrec.dropout_rate,
+                "batch_size": self.sasrec.batch_size,
+                "max_epochs": self.sasrec.max_epochs,
+                "learning_rate": self.sasrec.learning_rate,
+                "patience": self.sasrec.patience,
+            },
+            "reproducibility": {
+                "seed": self.seed,
             },
         }
 
