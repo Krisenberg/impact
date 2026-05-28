@@ -5,13 +5,14 @@ import logging
 from pathlib import Path
 
 import click
+import dotenv
 import polars as pl
 import structlog
 
-from impact.cli import inject_pipeline_config
-from impact.configuration import load_config
+from impact.cli import inject_impact_config
+from impact.config import ImpactConfig
 from impact.logger import configure_logging
-from impact.pipeline import DataPipeline, PipelineConfig
+from impact.pipelines import DataPipeline, SASRecTrainingPipeline
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -75,15 +76,25 @@ def cli() -> None:
         Root directory for log files. Defaults to project root / 'logs'.
     """,
 )
-@inject_pipeline_config
+@click.option(
+    "--models-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=False,
+    help="""
+        Root directory for trained and serialized models, model predictions, or model
+        summaries. Defaults to project root / 'models'.
+    """,
+)
+@inject_impact_config
 def main_pipeline(
-    pipeline_config: PipelineConfig,
+    impact_config: ImpactConfig,
     log_level: str,
     n_partitions: int,
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
     processed_data_dir: Path | None = None,
     base_logs_dir: Path | None = None,
+    models_dir: Path | None = None,
     exec_time: datetime.datetime | None = None,
 ) -> None:
     """IMPACT main pipeline execution entrypoint."""
@@ -94,6 +105,7 @@ def main_pipeline(
     interim_data_dir = interim_data_dir or project_root / "data" / "interim"
     processed_data_dir = processed_data_dir or project_root / "data" / "processed"
     base_logs_dir = base_logs_dir or project_root / "logs"
+    models_dir = models_dir or project_root / "models"
 
     # Configure logging
     logs_dir = _get_logs_dir(base_dir=base_logs_dir, timestamp=timestamp)
@@ -107,15 +119,17 @@ def main_pipeline(
 
     logger.info("IMPACT application initialized", run_timestamp=timestamp.isoformat())
 
-    _ = load_config()  # Load env configuration (e.g. HuggingFace API token)
+    # Load env configuration (e.g. HuggingFace API token)
+    logger.info("Attempting to load env variables from .env file")
+    _ = dotenv.load_dotenv()
 
     pipeline = DataPipeline(
         raw_dir=raw_data_dir,
         interim_dir=interim_data_dir,
         processed_dir=processed_data_dir,
-        config=pipeline_config,
+        config=impact_config,
     )
-    ds_size = pipeline_config.dataset_size
+    ds_size = impact_config.dataset_size
 
     events_lf = pipeline.get_raw_events()
     print(f"{ds_size} events_lf: {events_lf.select(pl.len()).collect().item()}")
@@ -130,14 +144,21 @@ def main_pipeline(
     print(f"{ds_size} train: {splits.train.lf.select(pl.len()).collect().item()}")
     print(f"{ds_size} val: {splits.val.lf.select(pl.len()).collect().item()}")
     print(f"{ds_size} test: {splits.test.lf.select(pl.len()).collect().item()}")
-    item_to_idx_len = splits.item_to_idx.lf.select(pl.len()).collect().item()
-    print(f"{ds_size} item_to_idx: {item_to_idx_len}")
+    print(
+        f"{ds_size} item-idx: {splits.item_to_idx.lf.select(pl.len()).collect().item()}"
+    )
 
     tensors = pipeline.tensorize(splits)
     n, l, k = tensors.train.meta  # noqa: E741
     print(f"{ds_size} train tensors: N={n}, L={l}, K={k}")
     print(f"{ds_size} val tensors:   N={tensors.val.meta[0]}")
     print(f"{ds_size} test tensors:  N={tensors.test.meta[0]}")
+
+    sasrec_training_pipeline = SASRecTrainingPipeline(
+        models_dir=models_dir,
+        config=impact_config,
+    )
+    sasrec_training_pipeline.train(tensors)
 
     logger.info("IMPACT application completed")
 
