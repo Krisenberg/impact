@@ -15,16 +15,17 @@ def compute_recall_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> 
         The mean Recall@K across the batch.
     """
     # Extract top-K predicted item indices
-    _, topk_indices = torch.topk(logits, k=k, dim=-1)
+    _, topk_indices = torch.topk(logits, k=k, dim=-1)  # [B, k]
 
-    # Compute hits
-    hits = torch.isin(elements=topk_indices, test_elements=targets).float().sum(dim=1)
+    # Per-row hit check: [B, k, 1] == [B, 1, T] -> [B, k, T] -> [B, k]
+    hits = (topk_indices.unsqueeze(2) == targets.unsqueeze(1)).any(dim=2).float()
+    num_hits = hits.sum(dim=1)  # [B]
 
     # Compute valid target lengths (ignoring padding index 0)
     target_lengths = (targets != 0).sum(dim=-1).float().clamp(min=1)
 
     # Recall is the number of hits divided by the number of ground truth items
-    return (hits / target_lengths).mean().item()
+    return (num_hits / target_lengths).mean().item()
 
 
 def compute_ndcg_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> float:
@@ -39,14 +40,16 @@ def compute_ndcg_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> fl
         The mean NDCG@K across the batch.
     """
     # Extract top-K predicted item indices
-    _, topk_indices = torch.topk(logits, k=k, dim=-1)
+    _, topk_indices = torch.topk(logits, k=k, dim=-1)  # [B, k]
 
     # Calculate discounts: 1 / log2(rank + 1)
     ranks = torch.arange(2, k + 2, device=logits.device, dtype=torch.float)
     discounts = 1.0 / torch.log2(ranks)
 
+    # Per-row hit check: [B, k, 1] == [B, 1, T] -> [B, k, T] -> [B, k]
+    hits = (topk_indices.unsqueeze(2) == targets.unsqueeze(1)).any(dim=2).float()
+
     # Discounted Cumulative Gain (DCG)
-    hits = torch.isin(elements=topk_indices, test_elements=targets).float()
     dcg = (hits * discounts).sum(dim=1)
 
     # Compute valid target lengths (ignoring padding index 0)
