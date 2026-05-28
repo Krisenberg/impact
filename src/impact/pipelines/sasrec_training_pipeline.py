@@ -48,32 +48,24 @@ class SASRecTrainingPipeline:
         self._run_models_dir.mkdir(parents=True, exist_ok=True)
         self._model_save_path = self._run_models_dir / "sasrec_best.pt"
 
-    def train(
-        self,
-        split: MemmapSplit,
-        batch_size: int = 2048,
-        max_epochs: int = 100,
-        lr: float = 0.001,
-        patience: int = 10,
-        seed: int = 42,
-    ) -> None:
+    def train(self, split: MemmapSplit) -> None:
         """Execute the training and validation loop.
 
         Args:
             split: The memory-mapped dataset splits containing pre-computed tensors.
-            batch_size: Number of sequences per training batch.
-            max_epochs: Maximum number of training epochs to run.
-            lr: Learning rate for the AdamW optimizer.
-            patience: Number of epochs to wait for validation improvement before
-                stopping.
-            seed: Global random seed for strict reproducibility.
         """
-        logger.info("Initializing SASRecNBR training run", batch_size=batch_size, lr=lr)
+        logger.info(
+            "Initializing SASRecNBR training run",
+            batch_size=self._config.sasrec.batch_size,
+            learning_rate=self._config.sasrec.learning_rate,
+            patience=self._config.sasrec.patience,
+            max_epochs=self._config.sasrec.max_epochs,
+        )
 
         # Setup deterministic random state
         # seed_everything(seed)
         g = torch.Generator()
-        _ = g.manual_seed(seed)
+        _ = g.manual_seed(self._config.seed)
 
         num_items = split.num_items
         logger.info(
@@ -89,7 +81,7 @@ class SASRecTrainingPipeline:
         # Configure DataLoaders with multi-processing seed protection
         train_loader = DataLoader[SequenceSample](
             train_ds,
-            batch_size=batch_size,
+            batch_size=self._config.sasrec.batch_size,
             shuffle=True,
             collate_fn=get_collate_fn(num_items),
             num_workers=4,
@@ -100,7 +92,7 @@ class SASRecTrainingPipeline:
 
         val_loader = DataLoader[SequenceSample](
             val_ds,
-            batch_size=batch_size,
+            batch_size=self._config.sasrec.batch_size,
             shuffle=False,
             collate_fn=get_collate_fn(num_items),
             num_workers=4,
@@ -121,7 +113,11 @@ class SASRecTrainingPipeline:
             # dropout=self.config.dropout_rate,
         )
 
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+        optimizer = torch.optim.AdamW(
+            params=model.parameters(),
+            lr=self._config.sasrec.learning_rate,
+            weight_decay=1e-4,
+        )
 
         # Trainer initialization and execution
         trainer = SASRecTrainer(
@@ -130,10 +126,13 @@ class SASRecTrainingPipeline:
             val_loader=cast(DataLoader[SequenceBatch], val_loader),
             optimizer=optimizer,
             device=device,
-            patience=patience,
+            patience=self._config.sasrec.patience,
         )
 
-        trainer.fit(max_epochs=max_epochs, save_path=self._model_save_path)
+        trainer.fit(
+            max_epochs=self._config.sasrec.max_epochs,
+            save_path=self._model_save_path,
+        )
 
         logger.info(
             "SASRecNBR training complete, best model saved",
