@@ -88,7 +88,7 @@ def estimate_processing_partitions(
     import psutil
 
     estimated_size = _estimate_size_bytes(data)
-    available_ram = cast(int, psutil.virtual_memory().available)
+    available_ram = cast(int, psutil.virtual_memory().available)  # type: ignore[redundant-cast]
     usable_ram = available_ram * target_ram_fraction
     partitions = max(1, min(64, math.ceil(estimated_size / usable_ram)))
 

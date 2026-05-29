@@ -1,7 +1,7 @@
 .vscode
 data
 logs
-./models/
+/models/*
 notebooks
 reports
 

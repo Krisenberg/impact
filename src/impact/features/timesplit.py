@@ -392,6 +392,9 @@ def _write_partitioned[T: pl.LazyFrame | pl.DataFrame](
         part = cast(T, data.filter(pl.col("partition") == i).drop("partition"))
         if transform is not None:
             part = transform(part)
+
+        partition_path = out_dir / ParquetDataset.file_name(partition=i)
         if isinstance(part, pl.LazyFrame):
-            part = part.collect()
-        part.write_parquet(out_dir / ParquetDataset.file_name(partition=i))
+            part.collect().write_parquet(partition_path)
+        else:
+            part.write_parquet(partition_path)
