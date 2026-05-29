@@ -201,12 +201,34 @@ def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
             """,
         ),
         click.option(
+            "--eval-ks",
+            type=tuple[int, ...],
+            default=(5, 10, 40, 100),
+            show_default=True,
+            help="""
+                Tuple of K cut-off values for computing NDCG@K and Recall@K during
+                evaluation.
+            """,
+        ),
+        click.option(
             "--seed",
             type=int,
             default=42,
             show_default=True,
             help="""
                 Global random seed for strict reproducibility.
+            """,
+        ),
+        click.option(
+            "--num-workers",
+            type=int,
+            default=4,
+            show_default=True,
+            help="""
+                Number of subprocesses to use for data loading.
+
+                Set to 0 to load data in the main process, or higher for parallel
+                loading (hardware-dependent).
             """,
         ),
     ]

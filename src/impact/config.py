@@ -88,9 +88,19 @@ class ImpactConfig:
     sasrec: SASRecConfig = field(default_factory=SASRecConfig)
     """Configuration for the SASRecNBR model."""
 
-    # === Seed for randomness ===
+    # === Evaluation ===
+    eval_ks: tuple[int, ...] = (5, 10, 40, 100)
+    """Tuple of K cut-off values for computing NDCG@K and Recall@K during evaluation."""
+
+    # === System / Hardware ===
     seed: int = 42
     """Global random seed for strict reproducibility."""
+    num_workers: int = 4
+    """Number of subprocesses to use for data loading.
+
+    Set to 0 to load data in the main process, or higher for parallel loading
+    (hardware-dependent).
+    """
 
     def __post_init__(self) -> None:
         """Verify that the selected dataset type is supported."""
@@ -210,8 +220,9 @@ class ImpactConfig:
                 "learning_rate": self.sasrec.learning_rate,
                 "patience": self.sasrec.patience,
             },
-            "reproducibility": {
+            "system": {
                 "seed": self.seed,
+                "num_workers": self.num_workers,
             },
         }
 
