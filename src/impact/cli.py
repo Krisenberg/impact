@@ -191,6 +191,16 @@ def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
             """,
         ),
         click.option(
+            "--sasrec-k",
+            type=int,
+            default=10,
+            show_default=True,
+            help="""
+                (SASRecNBR) Cutoff for NDCG@K and Recall@K metrics used during model
+                training.
+            """,
+        ),
+        click.option(
             "--sasrec-patience",
             type=int,
             default=10,

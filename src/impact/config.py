@@ -26,6 +26,8 @@ class SASRecConfig:
     """Maximum number of training epochs to run."""
     learning_rate: float = 0.001
     """Learning rate for the optimizer."""
+    k: int = 10
+    """Cutoff for NDCG@K and Recall@K metrics used during model training."""
     patience: int = 10
     """Number of epochs to wait for validation improvement before stopping."""
 
