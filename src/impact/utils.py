@@ -7,6 +7,60 @@ import structlog
 
 logger = structlog.stdlib.get_logger(__name__)
 
+WORKER_SEED_MODULUS: int = 2**32
+
+
+def seed_everything(seed: int) -> None:
+    """Seed all RNG sources in the main process for reproducibility.
+
+    Sets seeds for Python's random, NumPy, and PyTorch (CPU, CUDA, MPS) modules.
+    Also disables cuDNN benchmark mode and enables deterministic operations.
+    Should be called once at the top-level entry point before any data loading or model
+    initialisation.
+
+    Inspired by: https://gist.github.com/ihoromi4/b681a9088f348942b01711f251e5f964
+
+    Args:
+        seed: Global random seed.
+    """
+    import os
+    import random
+
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    np.random.seed(seed)
+    _ = torch.manual_seed(seed)
+    torch.mps.manual_seed(seed)  # For Apple Chip
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def seed_worker(_: int) -> None:  # Ignore the argument (worker_id)
+    """Seed RNG sources inside a PyTorch's DataLoader worker process.
+
+    Each worker is forked from the main process and requires independent re-seeding to
+    avoid all workers producing identical random sequences (e.g. for negative sampling).
+    The per-worker seed is derived from PyTorch's initial worker seed, ensuring workers
+    are both independent and deterministic given the same global seed.
+
+    Pass this function as `worker_init_fn` to DataLoader.
+
+    Args:
+        worker_id: Worker index provided automatically by DataLoader.
+    """
+    import random
+
+    import numpy as np
+    import torch
+
+    worker_seed = torch.initial_seed() % WORKER_SEED_MODULUS
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
 
 def estimate_processing_partitions(
     data: pl.LazyFrame | pl.DataFrame,
