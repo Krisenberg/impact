@@ -202,12 +202,12 @@ executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
   { root = "scripts/tables.py", reportAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
-  { root = "src/impact/config.py", reportAny = false, reportExplicitAny = false },
-  { root = "src/impact/pipeline.py", reportExplicitAny = false },
+  { root = "src/impact/config.py", reportExplicitAny = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src/impact/features/sequences.py", reportExplicitAny = false },
   { root = "src/impact/features/tensorization.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/models/sasrec/dataset.py", reportAny = false },
   { root = "src/impact/models/sasrec/trainer.py", reportUnknownVariableType = false },
+  { root = "src/impact/pipelines/evaluation_pipeline.py", reportUnusedCallResult = false, reportAny = false },
   { root = "src" },
 ]
