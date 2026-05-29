@@ -37,7 +37,7 @@ class DataPipeline:
                 (e.g., after extracting sessions or sequences).
             processed_dir: Path to the directory for final, ML-ready datasets
                 (e.g., train/val/test splits).
-            config: The configuration object defining parameters for all pipeline steps.
+            config: Complete IMPACT Framework configuration.
         """
         self.raw_dir: Path = raw_dir.resolve()
         self.interim_dir: Path = interim_dir.resolve()

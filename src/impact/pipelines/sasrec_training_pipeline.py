@@ -17,6 +17,7 @@ from impact.models.sasrec import (
     get_collate_fn,
     get_eval_collate_fn,
 )
+from impact.utils import seed_worker
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -49,12 +50,19 @@ class SASRecTrainingPipeline:
         self._run_models_dir.mkdir(parents=True, exist_ok=True)
         self._model_save_path = self._run_models_dir / "sasrec_best.pt"
 
-    def train(self, split: MemmapSplit) -> None:
+    def train(self, split: MemmapSplit) -> Path:
         """Execute the training and validation loop.
 
         Args:
-            split: The memory-mapped dataset splits containing pre-computed tensors.
+            split: The memory-mapped, tensorized train/val/test temporal splits; train
+                split is used for model training, val split is used for validation and
+                early stopping, num_items for model and dataset initialisation.
+
+        Returns:
+            Path to the best-performing model checkpoint (state dict).
         """
+        # return self._model_save_path
+
         logger.info(
             "Initializing SASRecNBR training run",
             batch_size=self._config.sasrec.batch_size,
@@ -62,11 +70,6 @@ class SASRecTrainingPipeline:
             patience=self._config.sasrec.patience,
             max_epochs=self._config.sasrec.max_epochs,
         )
-
-        # Setup deterministic random state
-        # seed_everything(seed)
-        g = torch.Generator()
-        _ = g.manual_seed(self._config.seed)
 
         num_items = split.num_items
         logger.info(
@@ -79,15 +82,19 @@ class SASRecTrainingPipeline:
         train_ds = SequenceDataset(split.train, num_items)
         val_ds = SequenceDataset(split.val, num_items)
 
+        # Setup deterministic random state
+        g = torch.Generator()
+        _ = g.manual_seed(self._config.seed)
+
         # Configure DataLoaders with multi-processing seed protection
         train_loader = DataLoader[SequenceSample](
             train_ds,
             batch_size=self._config.sasrec.batch_size,
             shuffle=True,
             collate_fn=get_collate_fn(num_items),
-            num_workers=4,
+            num_workers=self._config.num_workers,
             pin_memory=True,
-            # worker_init_fn=seed_worker,
+            worker_init_fn=seed_worker,
             generator=g,
         )
 
@@ -96,10 +103,9 @@ class SASRecTrainingPipeline:
             batch_size=self._config.sasrec.batch_size,
             shuffle=False,
             collate_fn=get_eval_collate_fn(),
-            num_workers=4,
+            num_workers=self._config.num_workers,
             pin_memory=True,
-            # worker_init_fn=seed_worker,
-            generator=g,
+            worker_init_fn=seed_worker,
         )
 
         # Device and Model allocation
@@ -127,6 +133,7 @@ class SASRecTrainingPipeline:
             val_loader=cast(DataLoader[SequenceBatch], val_loader),
             optimizer=optimizer,
             device=device,
+            k=self._config.sasrec.k,
             patience=self._config.sasrec.patience,
         )
 
@@ -139,3 +146,5 @@ class SASRecTrainingPipeline:
             "SASRecNBR training complete, best model saved",
             best_model_path=self._model_save_path,
         )
+
+        return self._model_save_path

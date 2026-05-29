@@ -18,6 +18,7 @@ from impact.models.sasrec import (
     get_eval_collate_fn,
 )
 from impact.models.sasrec.dataset import SequenceSample
+from impact.utils import seed_worker
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -50,7 +51,6 @@ class EvaluationPipeline:
         self,
         split: MemmapSplit,
         sasrec_state_dict_path: Path,
-        ks: list[int] | None = None,
     ) -> dict[str, float]:
         """Run evaluation on the test split for multiple K cut-off levels.
 
@@ -62,12 +62,10 @@ class EvaluationPipeline:
                 split is used for evaluation, num_items for model and dataset
                 initialisation.
             sasrec_state_dict_path: Path to the saved SASRecNBR model state dict.
-            ks: List of K values (cutoffs) for evaluation. Defaults to [5, 10, 40, 100].
 
         Returns:
             A dictionary of NDCG@K and Recall@K metrics.
         """
-        ks = ks or [5, 10, 40, 100]
         logger.info(
             "Starting evaluation pipeline",
             # alpha=self.config.alpha,
@@ -80,8 +78,9 @@ class EvaluationPipeline:
             batch_size=self._config.sasrec.batch_size,
             shuffle=False,
             collate_fn=get_eval_collate_fn(),  # No negative sampling
-            num_workers=4,
+            num_workers=self._config.num_workers,
             pin_memory=True,
+            worker_init_fn=seed_worker,
         )
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -103,8 +102,8 @@ class EvaluationPipeline:
         model.to(device)
         model.eval()
 
-        ndcg_sums = dict.fromkeys(ks, 0.0)
-        recall_sums = dict.fromkeys(ks, 0.0)
+        ndcg_sums = dict.fromkeys(self._config.eval_ks, 0.0)
+        recall_sums = dict.fromkeys(self._config.eval_ks, 0.0)
         total_samples = 0
 
         pbar = tqdm(
@@ -135,7 +134,7 @@ class EvaluationPipeline:
             final_scores = sasrec_logits
 
             # Calculate final metrics
-            for k in ks:
+            for k in self._config.eval_ks:
                 batch_ndcg = compute_ndcg_at_k(final_scores, target, k=k)
                 batch_recall = compute_recall_at_k(final_scores, target, k=k)
 
@@ -145,7 +144,7 @@ class EvaluationPipeline:
             total_samples += batch_len
 
         metrics: dict[str, float] = {}
-        for k in ks:
+        for k in self._config.eval_ks:
             metrics[f"ndcg_at_{k}"] = ndcg_sums[k] / total_samples
             metrics[f"recall_at_{k}"] = recall_sums[k] / total_samples
 
