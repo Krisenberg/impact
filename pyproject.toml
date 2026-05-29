@@ -9,7 +9,6 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.4.0",
-    "environ-config>=24.1.0",
     "huggingface-hub>=1.15.0",
     "jinja2>=3.1.6",
     "pandas>=3.0.3",
@@ -18,6 +17,8 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
     "structlog>=25.5.0",
+    "torch>=2.12.0",
+    "tqdm>=4.67.3",
 ]
 
 [dependency-groups]
@@ -27,7 +28,9 @@ dev = [
     "mypy>=2.1.0",
     "pandas-stubs>=3.0.0.260204",
     "ruff>=0.15.13",
+    "types-psutil>=7.2.2.20260518",
     "types-pyyaml>=6.0.12.20260518",
+    "types-tqdm>=4.67.3.20260518",
 ]
 
 [build-system]
@@ -182,7 +185,11 @@ exclude = [
 # ignore_missing_imports = true  # Ignore missing library stubs or py.typed markers from 3rd-party libraries
 
 [tool.basedpyright]
-include = ["src", "tests"]       # Scan and analyze given files or directories
+include = [                      # Scan and analyze given files or directories
+    "scripts",
+    "src",
+    "tests",
+]
 exclude = [".venv", "dist"]      # Exclude from the analysis given files or directories
 ignore = [                       # Suppress all diagnostics (e.g., for a legacy code)
     "src/legacy",
@@ -191,14 +198,18 @@ pythonVersion = "3.12"           # Assume this Python version when type checking
 typeCheckingMode = "recommended" # Basedpyright-native strict mode
 reportMissingTypeStubs = false   # Don't error on third-party libraries without type stubs
 reportUnknownMemberType = false  # Suppress warnings from third-party libraries
+reportPrivateImportUsage = false # Assume that the user knows what they're doing
 
 executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
   { root = "scripts/tables.py", reportAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
-  { root = "src/impact/configuration.py", reportAny = false },
-  { root = "src/impact/pipeline.py", reportExplicitAny = false },
+  { root = "src/impact/config.py", reportExplicitAny = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src/impact/features/sequences.py", reportExplicitAny = false },
+  { root = "src/impact/features/tensorization.py", reportAny = false, reportExplicitAny = false },
+  { root = "src/impact/models/sasrec/dataset.py", reportAny = false },
+  { root = "src/impact/models/sasrec/trainer.py", reportUnknownVariableType = false },
+  { root = "src/impact/pipelines/evaluation_pipeline.py", reportUnusedCallResult = false, reportAny = false },
   { root = "src" },
 ]

@@ -5,20 +5,20 @@ from typing import TYPE_CHECKING, Any
 
 import click
 
+from impact.config import ImpactConfig, SASRecConfig
 from impact.dataset import DatasetSize, DatasetType, InteractionType
-from impact.pipeline import PipelineConfig
 
 if TYPE_CHECKING:
     from enum import StrEnum
 
 
-def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
-    """Inject PipelineConfig fields as Click options and pass the instantiated config.
+def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
+    """Inject ImpactConfig fields as Click options and pass the instantiated config.
 
-    The decorated function must accept `pipeline_config: PipelineConfig` as a keyword
+    The decorated function must accept `impact_config: ImpactConfig` as a keyword
     argument.
     """
-    # Define all click options, matching the defaults from PipelineConfig
+    # Define all click options, matching the defaults from ImpactConfig
     options = [
         click.option(
             "--dataset-size",
@@ -126,6 +126,121 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
                 parameter is to mimic production system deployment latency.
             """,
         ),
+        click.option(
+            "--sasrec-embedding-dim",
+            type=int,
+            default=64,
+            show_default=True,
+            help="""
+                (SASRecNBR) Dimension of item and positional embeddings.
+            """,
+        ),
+        click.option(
+            "--sasrec-num-heads",
+            type=int,
+            default=2,
+            show_default=True,
+            help="""
+                (SASRecNBR) Number of attention heads in each Transformer layer.
+            """,
+        ),
+        click.option(
+            "--sasrec-num-layers",
+            type=int,
+            default=2,
+            show_default=True,
+            help="""
+                (SASRecNBR) Number of Transformer encoder layers.
+            """,
+        ),
+        click.option(
+            "--sasrec-dropout",
+            type=float,
+            default=0.2,
+            show_default=True,
+            help="""
+                (SASRecNBR) Dropout probability applied after embedding and within each
+                layer.
+            """,
+        ),
+        click.option(
+            "--sasrec-batch-size",
+            type=int,
+            default=2048,
+            show_default=True,
+            help="""
+                (SASRecNBR) Number of sequences per training batch.
+            """,
+        ),
+        click.option(
+            "--sasrec-max-epochs",
+            type=int,
+            default=100,
+            show_default=True,
+            help="""
+                (SASRecNBR) Maximum number of training epochs to run.
+            """,
+        ),
+        click.option(
+            "--sasrec-learning-rate",
+            type=float,
+            default=0.001,
+            show_default=True,
+            help="""
+                (SASRecNBR) Learning rate for the optimizer.
+            """,
+        ),
+        click.option(
+            "--sasrec-k",
+            type=int,
+            default=10,
+            show_default=True,
+            help="""
+                (SASRecNBR) Cutoff for NDCG@K and Recall@K metrics used during model
+                training.
+            """,
+        ),
+        click.option(
+            "--sasrec-patience",
+            type=int,
+            default=10,
+            show_default=True,
+            help="""
+                (SASRecNBR) Number of epochs to wait for validation improvement before
+                stopping.
+            """,
+        ),
+        click.option(
+            "--eval-ks",
+            type=tuple[int, ...],
+            default=(5, 10, 40, 100),
+            show_default=True,
+            help="""
+                Tuple of K cut-off values for computing NDCG@K and Recall@K during
+                evaluation.
+            """,
+        ),
+        click.option(
+            "--seed",
+            type=int,
+            default=42,
+            show_default=True,
+            help="""
+                Global random seed for strict reproducibility.
+            """,
+        ),
+        click.option(
+            "--num-workers",
+            type=int,
+            default=4,
+            show_default=True,
+            help="""
+                Number of subprocesses to use for data loading.
+
+                Set to 0 to load data in the main process, or higher for parallel
+                loading (hardware-dependent).
+            """,
+        ),
     ]
 
     # Apply Click options to the function in rev order (to maintain defined ordering)
@@ -134,26 +249,39 @@ def inject_pipeline_config(f: Callable[..., Any]) -> Callable[..., Any]:
 
     @wraps(f)
     def _wrapper(*args: Any, **kwargs: Any) -> Any:
-        # Extract fields belonging to PipelineConfig
-        config_kwargs: dict[str, Any] = {}
+        # Extract fields belonging to ImpactConfig
+        sasrec_kwargs: dict[str, Any] = {}
+        impact_kwargs: dict[str, Any] = {}
+        remaining_kwargs: dict[str, Any] = {}
+
+        sasrec_field_names = {f.name for f in dataclasses.fields(SASRecConfig)}
+        impact_field_names = {f.name for f in dataclasses.fields(ImpactConfig)}
+
         enum_by_field_name: dict[str, type[StrEnum]] = {
             "dataset_size": DatasetSize,
             "dataset_type": DatasetType,
             "interaction_type": InteractionType,
         }
-        for field in dataclasses.fields(PipelineConfig):
-            if field.name not in kwargs:
-                continue
-            if field.name in enum_by_field_name:
-                # Parse string choice back into its respective Enum class
-                enum = enum_by_field_name[field.name]
-                config_kwargs[field.name] = enum(kwargs.pop(field.name))
+        for key, value in kwargs.items():
+            print(key, value)
+            if key.startswith("sasrec_"):
+                nested_key = key.removeprefix("sasrec_")
+                if nested_key in sasrec_field_names:
+                    sasrec_kwargs[nested_key] = value
+            elif key in impact_field_names:
+                if key in enum_by_field_name:
+                    # Parse string choice back into its respective Enum class
+                    enum = enum_by_field_name[key]
+                    impact_kwargs[key] = enum(value)
+                else:
+                    impact_kwargs[key] = value
             else:
-                config_kwargs[field.name] = kwargs.pop(field.name)
+                remaining_kwargs[key] = value
 
-        pipeline_config = PipelineConfig(**config_kwargs)
+        impact_kwargs["sasrec"] = SASRecConfig(**sasrec_kwargs)
+        impact_config = ImpactConfig(**impact_kwargs)
 
         # Inject the config object and forward remaining CLI options
-        return f(*args, pipeline_config=pipeline_config, **kwargs)
+        return f(*args, impact_config=impact_config, **remaining_kwargs)
 
     return _wrapper

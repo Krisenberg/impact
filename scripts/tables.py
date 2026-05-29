@@ -10,10 +10,11 @@ import click
 import polars as pl
 import structlog
 
-from impact.cli import inject_pipeline_config
+from impact.cli import inject_impact_config
+from impact.config import ImpactConfig
 from impact.dataset import DatasetSize
 from impact.logger import configure_logging
-from impact.pipeline import DataPipeline, PipelineConfig
+from impact.pipelines import DataPipeline
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -76,9 +77,9 @@ def cli() -> None:
         Defaults to project root / 'data' / 'processed'.
     """,
 )
-@inject_pipeline_config
+@inject_impact_config
 def generate_data_funnel_stats_table(
-    pipeline_config: PipelineConfig,
+    impact_config: ImpactConfig,
     log_level: str,
     lang: str = "pl",
     out_dir: Path | None = None,
@@ -125,7 +126,7 @@ def generate_data_funnel_stats_table(
         raw_dir=raw_data_dir or project_root / "data" / "raw",
         interim_dir=interim_data_dir or project_root / "data" / "interim",
         processed_dir=processed_data_dir or project_root / "data" / "processed",
-        config=pipeline_config,
+        config=impact_config,
     )
 
     out_dir = out_dir or project_root / "reports" / "tables" / "data-funnel-stats"
@@ -158,7 +159,7 @@ def generate_data_funnel_stats_table(
     for ds_size, variant in variants.items():
         logger.info(f"Processing {ds_size.name} dataset variant")
         variant_config = dataclasses.replace(
-            pipeline_config,
+            impact_config,
             dataset_size=ds_size,
             step=variant.step,
         )
