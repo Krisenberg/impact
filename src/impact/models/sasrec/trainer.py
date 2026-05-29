@@ -146,20 +146,28 @@ class SASRecTrainer:
             loader: DataLoader to evaluate on.
 
         Returns:
-            Tuple of (NDCG@K, Recall@K) averaged over all batches.
+            Tuple of (NDCG@K, Recall@K) as sample-weighted averages over all batches.
         """
         _ = self._model.eval()
         ndcg_sum, recall_sum = 0.0, 0.0
+        total_samples = 0
 
         for batch in cast(Iterator[SequenceBatch], iter(loader)):
             batch = batch.to(self._device)
+            context = batch.context
+            target = batch.positive
+            batch_len = target.size(0)
 
             # Forward pass (get intent vectors)
-            hidden_state = cast(torch.Tensor, self._model(batch.context))
+            hidden_state = cast(torch.Tensor, self._model(context))
             logits = self._model.score_all_items(hidden_state)
 
-            ndcg_sum += compute_ndcg_at_k(logits, batch.positive, k=self._k)
-            recall_sum += compute_recall_at_k(logits, batch.positive, k=self._k)
+            batch_ndcg = compute_ndcg_at_k(logits, target, k=self._k)
+            batch_recall = compute_recall_at_k(logits, target, k=self._k)
 
-        num_batches = len(loader)
-        return ndcg_sum / num_batches, recall_sum / num_batches
+            ndcg_sum += batch_ndcg * batch_len
+            recall_sum += batch_recall * batch_len
+
+            total_samples += batch_len
+
+        return ndcg_sum / total_samples, recall_sum / total_samples
