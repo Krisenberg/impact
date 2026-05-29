@@ -190,42 +190,76 @@ class ImpactConfig:
             self.config_hash[:7],
         ])  # fmt: skip
 
-    def to_dict(self) -> dict[str, dict[str, Any]]:
-        """Serialize the flat configuration into a structured, nested dictionary."""
+    def to_dict(self, nested: bool = False) -> dict[str, Any]:
+        """Serialize the IMPACT Framework configuration to a dictionary.
+
+        Args:
+            nested: If True, parameters are grouped by section (e.g. `dataset`,
+            `sasrec`). If False, all parameters are returned as a flat mapping of
+            field names to values.
+        """
+        if nested:
+            return {
+                "dataset": {
+                    "dataset_size": self.dataset_size.value,
+                    "dataset_type": self.dataset_type.value,
+                    "interaction_type": self.interaction_type.value,
+                },
+                "sessions": {
+                    "inactivity_gap_seconds": self.inactivity_gap_seconds,
+                    "tracks_per_session": self.tracks_per_session,
+                    "min_listen_seconds": self.min_listen_seconds,
+                },
+                "sequences": {
+                    "context_sessions": self.context_sessions,
+                    "step": self.step,
+                },
+                "timesplit": {
+                    "test_days": self.test_days,
+                    "val_days": self.val_days,
+                    "gap_minutes": self.gap_minutes,
+                },
+                "sasrecnbr_model": {
+                    "embedding_dim": self.sasrec.embedding_dim,
+                    "num_heads": self.sasrec.num_heads,
+                    "num_layers": self.sasrec.num_layers,
+                    "dropout_rate": self.sasrec.dropout_rate,
+                    "batch_size": self.sasrec.batch_size,
+                    "max_epochs": self.sasrec.max_epochs,
+                    "learning_rate": self.sasrec.learning_rate,
+                    "patience": self.sasrec.patience,
+                },
+                "evaluation": {
+                    "eval_ks": self.eval_ks,
+                },
+                "system": {
+                    "seed": self.seed,
+                    "num_workers": self.num_workers,
+                },
+            }
         return {
-            "dataset": {
-                "dataset_size": self.dataset_size.value,
-                "dataset_type": self.dataset_type.value,
-                "interaction_type": self.interaction_type.value,
-            },
-            "sessions": {
-                "inactivity_gap_seconds": self.inactivity_gap_seconds,
-                "tracks_per_session": self.tracks_per_session,
-                "min_listen_seconds": self.min_listen_seconds,
-            },
-            "sequences": {
-                "context_sessions": self.context_sessions,
-                "step": self.step,
-            },
-            "timesplit": {
-                "test_days": self.test_days,
-                "val_days": self.val_days,
-                "gap_minutes": self.gap_minutes,
-            },
-            "sasrecnbr_model": {
-                "embedding_dim": self.sasrec.embedding_dim,
-                "num_heads": self.sasrec.num_heads,
-                "num_layers": self.sasrec.num_layers,
-                "dropout_rate": self.sasrec.dropout_rate,
-                "batch_size": self.sasrec.batch_size,
-                "max_epochs": self.sasrec.max_epochs,
-                "learning_rate": self.sasrec.learning_rate,
-                "patience": self.sasrec.patience,
-            },
-            "system": {
-                "seed": self.seed,
-                "num_workers": self.num_workers,
-            },
+            "dataset_size": self.dataset_size.value,
+            "dataset_type": self.dataset_type.value,
+            "interaction_type": self.interaction_type.value,
+            "inactivity_gap_seconds": self.inactivity_gap_seconds,
+            "tracks_per_session": self.tracks_per_session,
+            "min_listen_seconds": self.min_listen_seconds,
+            "context_sessions": self.context_sessions,
+            "step": self.step,
+            "test_days": self.test_days,
+            "val_days": self.val_days,
+            "gap_minutes": self.gap_minutes,
+            "sasrec_embedding_dim": self.sasrec.embedding_dim,
+            "sasrec_num_heads": self.sasrec.num_heads,
+            "sasrec_num_layers": self.sasrec.num_layers,
+            "sasrec_dropout_rate": self.sasrec.dropout_rate,
+            "sasrec_batch_size": self.sasrec.batch_size,
+            "sasrec_max_epochs": self.sasrec.max_epochs,
+            "sasrec_learning_rate": self.sasrec.learning_rate,
+            "sasrec_patience": self.sasrec.patience,
+            "eval_ks": self.eval_ks,
+            "seed": self.seed,
+            "num_workers": self.num_workers,
         }
 
     def write_yaml(self, output_path: Path) -> None:

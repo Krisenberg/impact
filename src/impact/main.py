@@ -12,7 +12,8 @@ import structlog
 from impact.cli import inject_impact_config
 from impact.config import ImpactConfig
 from impact.logger import configure_logging
-from impact.pipelines import DataPipeline, SASRecTrainingPipeline
+from impact.pipelines import DataPipeline, EvaluationPipeline, SASRecTrainingPipeline
+from impact.utils import seed_everything
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -123,6 +124,9 @@ def main_pipeline(
     logger.info("Attempting to load env variables from .env file")
     _ = dotenv.load_dotenv()
 
+    # Set seed for reproducibility
+    seed_everything(impact_config.seed)
+
     pipeline = DataPipeline(
         raw_dir=raw_data_dir,
         interim_dir=interim_data_dir,
@@ -158,8 +162,16 @@ def main_pipeline(
         models_dir=models_dir,
         config=impact_config,
     )
-    sasrec_training_pipeline.train(tensors)
+    sasrec_state_dict_path = sasrec_training_pipeline.train(tensors)
 
+    evaluation_pipeline = EvaluationPipeline(impact_config)
+    metrics = evaluation_pipeline.evaluate(
+        tensors,
+        sasrec_state_dict_path=sasrec_state_dict_path,
+    )
+
+    logger.info("Evaluation pipeline completed", **metrics)
+    logger.info("IMPACT Framework configuration", **impact_config.to_dict())
     logger.info("IMPACT application completed")
 
 
