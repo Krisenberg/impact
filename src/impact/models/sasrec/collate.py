@@ -35,6 +35,18 @@ class SequenceBatch:
             negative=self.negative.to(device, non_blocking=non_blocking),
         )
 
+    def pin_memory(self) -> SequenceBatch:
+        """Pin memory of all underlying tensors, returning a new SequenceBatch.
+
+        This method should be automatically detected and executed by PyTorch's
+        DataLoader when pin_memory=True is configured.
+        """
+        return SequenceBatch(
+            context=self.context.pin_memory(),
+            positive=self.positive.pin_memory(),
+            negative=self.negative.pin_memory(),
+        )
+
 
 def get_collate_fn(num_items: int) -> Callable[[list[SequenceSample]], SequenceBatch]:
     """Return a collate function that assembles a SequenceBatch with sampled negatives.
