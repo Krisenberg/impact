@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import altair as alt
 import click
@@ -132,41 +132,62 @@ def cli() -> None:
 @click.option(
     "--log-file-path",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="""
-        Path to the JSON log file to parse.
-    """,
+    help="Path to the JSON log file to parse.",
 )
 @click.option(
     "--log-level",
-    type=click.Choice(choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
+    type=click.Choice(list(logging.getLevelNamesMapping()), case_sensitive=False),
     default="INFO",
-    help="""
-        Logging level.
-    """,
+    show_default=True,
+    help="Logging verbosity level.",
 )
 @click.option(
     "--lang",
     type=click.Choice(["pl", "en"], case_sensitive=False),
     default="pl",
-    help="Language for the plot/axis titles and textual content (pl or en).",
+    show_default=True,
+    help="Language for axis labels and annotations.",
 )
 @click.option(
     "--out-dir",
     "-o",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
-        Output directory for the created plots and other artifacts (e.g. ImpactConfig
-        YAML dumps). Defaults to project root / 'reports' / 'plots' / 'sasrec-training'.
+        Output directory for the generated plots and other artifacts. (e.g. ImpactConfig
+        YAML dumps). Defaults to <project_root>/reports/plots/sasrec-training.
     """,
+)
+@click.option(
+    "--format",
+    "-f",
+    "formats",
+    type=click.Choice(["svg", "pdf", "png"], case_sensitive=False),
+    multiple=True,
+    default=["svg", "pdf"],
+    show_default=True,
+    help="Output format(s). Can be specified multiple times: -f svg -f pdf.",
+)
+@click.option(
+    "--png-scale",
+    type=float,
+    default=3.0,
+    show_default=True,
+    help="Scale factor for PNG export. 3.0 is approx. 216 PPI - suitable for print.",
 )
 def plot_sasrec_training(
     log_file_path: Path,
     log_level: str,
-    lang: str = "pl",
-    out_dir: Path | None = None,
+    lang: str,
+    out_dir: Path | None,
+    formats: list[Literal["svg", "pdf", "png"]],
+    png_scale: float,
 ) -> None:
-    """..."""
+    """Plot SASRec training curves from a structured NDJSON log file.
+
+    Renders training loss (BCE) and validation NDCG@10 over epochs as a dual-axis chart,
+    styled for direct inclusion in a LaTeX thesis.
+    """
     configure_logging(
         level=logging.getLevelNamesMapping()[log_level],
     )  # Configure logging without piping logs to files
@@ -251,9 +272,12 @@ def plot_sasrec_training(
     )
 
     # -- Export --
-    svg_path = out_dir / f"sasrec_training_{log_file_path.stem}.svg"
-    chart.save(svg_path)
-    logger.info(f"Saved SVG plot to {svg_path.as_posix()}")
+    stem = f"sasrec_training_{log_file_path.stem}"
+    for fmt in formats:
+        kwargs: dict[str, Any] = {"scale_factor": png_scale} if fmt == "png" else {}
+        path = out_dir / f"{stem}.{fmt}"
+        chart.save(path, **kwargs)
+        logger.info(f"Saved chart in {fmt.upper()} format to {path}")
 
 
 if __name__ == "__main__":
