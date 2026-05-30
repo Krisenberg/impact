@@ -1,10 +1,15 @@
 """Module for creating plots that will be presented in the thesis."""
 
+import logging
 from pathlib import Path
 from typing import NamedTuple
 
 import altair as alt
+import click
+import polars as pl
 import structlog
+
+from impact.logger import configure_logging
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -33,7 +38,8 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 FONT: str = "Libertinus Serif"  # Match the serif font used in the thesis
 FONT_SIZE_BASE = 12  # Match the 12pt font used in the thesis
 FONT_SIZE_SMALL = 10
-# Okabe-Ito palette that is  colorblind-safe and prints well in greyscale
+COLOR_INK = "#1A1A1A"  # Labels, ticks, axis domains
+COLOR_GRID = "#E0E0E0"  # Passive guides - gridlines, legend borders
 OKABE_ITO_PALETTE = OkabeItoPalette(
     orange="#E69F00",
     sky_blue="#56B4E9",
@@ -44,13 +50,11 @@ OKABE_ITO_PALETTE = OkabeItoPalette(
     reddish_purple="#CC79A7",
     black="#000000",
 )
-COLOR_INK = "#1A1A1A"  # Labels, ticks, axis domains
-COLOR_GRID = "#E0E0E0"  # Passive guides - gridlines, legend borders
 
 
 @alt.theme.register("thesis_theme", enable=True)
 def thesis_theme() -> alt.theme.ThemeConfig:
-    """Register and enable a ..."""
+    """Register and enable an Altair theme for publication-quality visualisations."""
     return {
         "config": {
             # -- Canvas --
@@ -106,9 +110,9 @@ def thesis_theme() -> alt.theme.ThemeConfig:
                 "titleFont": FONT,
             },
             # -- Marks --
-            "line": {"strokeWidth": 1.8},
+            "line": {"strokeWidth": 1.6},
             "point": {"size": 35, "filled": True},
-            "bar": {"fill": OKABE_ITO_PALETTE.blue},
+            "bar": {"fill": OKABE_ITO_PALETTE.blue},  # pyright: ignore[reportReturnType]
             # -- Color scale default --
             "range": {
                 "category": OKABE_ITO_PALETTE,
@@ -116,3 +120,141 @@ def thesis_theme() -> alt.theme.ThemeConfig:
             },
         }
     }
+
+
+@click.group()
+def cli() -> None:
+    """CLI entrypoint for the functions defined in this module."""
+    pass
+
+
+@cli.command(name="sasrec-training")
+@click.option(
+    "--log-file-path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="""
+        Path to the JSON log file to parse.
+    """,
+)
+@click.option(
+    "--log-level",
+    type=click.Choice(choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
+    default="INFO",
+    help="""
+        Logging level.
+    """,
+)
+@click.option(
+    "--lang",
+    type=click.Choice(["pl", "en"], case_sensitive=False),
+    default="pl",
+    help="Language for the plot/axis titles and textual content (pl or en).",
+)
+@click.option(
+    "--out-dir",
+    "-o",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=False,
+    help="""
+        Output directory for the created plots and other artifacts (e.g. ImpactConfig
+        YAML dumps). Defaults to project root / 'reports' / 'plots' / 'sasrec-training'.
+    """,
+)
+def plot_sasrec_training(
+    log_file_path: Path,
+    log_level: str,
+    lang: str = "pl",
+    out_dir: Path | None = None,
+) -> None:
+    """..."""
+    configure_logging(
+        level=logging.getLevelNamesMapping()[log_level],
+    )  # Configure logging without piping logs to files
+
+    out_dir = out_dir or PROJECT_ROOT / "reports" / "plots" / "sasrec-training"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    logs_df = pl.read_ndjson(log_file_path)
+    epochs_df = logs_df.filter(pl.col("epoch").is_not_null()).select(
+        pl.col("epoch"), pl.col("train_loss"), pl.col("val_ndcg")
+    )
+
+    # -- Labels per language --
+    labels = {
+        "pl": {
+            "epoch": "Epoka",
+            "loss": "Strata treningowa (BCE)",
+            "ndcg": "NDCG@10 (walidacja)",
+        },
+        "en": {
+            "epoch": "Epoch",
+            "loss": "Training Loss (BCE)",
+            "ndcg": "NDCG@10 (validation)",
+        },
+    }[lang]
+
+    # -- Shared x-axis --
+    base = alt.Chart(epochs_df).encode(
+        x=alt.X(
+            shorthand="epoch:Q",
+            axis=alt.Axis(title=labels["epoch"], tickMinStep=1),
+            scale=alt.Scale(nice=False),
+        )
+    )
+
+    color_loss = OKABE_ITO_PALETTE.blue
+    color_ndcg = OKABE_ITO_PALETTE.vermillion
+
+    # -- Loss (left axis) --
+    loss_line = base.mark_line(color=color_loss).encode(
+        y=alt.Y(
+            shorthand="train_loss:Q",
+            axis=alt.Axis(
+                title=labels["loss"],
+                titleColor=color_loss,
+                labelColor=color_loss,
+                tickColor=color_loss,
+                domainColor=color_loss,
+                gridOpacity=0.5,
+            ),
+        ),
+    )
+    loss_points = base.mark_point(filled=True, color=color_loss).encode(
+        y=alt.Y(shorthand="train_loss:Q", axis=None)
+    )
+
+    # -- NDCG (right axis) --
+    ndcg_line = base.mark_line(color=color_ndcg, strokeDash=[8, 4]).encode(
+        y=alt.Y(
+            shorthand="val_ndcg:Q",
+            axis=alt.Axis(
+                title=labels["ndcg"],
+                titleColor=color_ndcg,
+                labelColor=color_ndcg,
+                tickColor=color_ndcg,
+                domainColor=color_ndcg,
+                grid=False,
+                format=".4f",
+            ),
+        ),
+    )
+    ndcg_points = base.mark_point(filled=True, color=color_ndcg).encode(
+        y=alt.Y("val_ndcg:Q", axis=None)
+    )
+
+    # -- Compose --
+    chart = (
+        alt.layer(loss_line, loss_points, ndcg_line, ndcg_points).resolve_scale(
+            y="independent"
+        )
+        # .properties(width=380, height=240)
+    )
+
+    # -- Export --
+    svg_path = out_dir / f"sasrec_training_{log_file_path.stem}.svg"
+    chart.save(svg_path)
+    logger.info(f"Saved SVG plot to {svg_path.as_posix()}")
+
+
+if __name__ == "__main__":
+    cli()
