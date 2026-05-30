@@ -28,6 +28,10 @@ typecheck: _uv
 run *ARGS: _uv
     uv run cli {{ARGS}}
 
+# Run the scripts/plots.py CLI
+thesis-plots *ARGS: _uv
+    uv run scripts/plots.py {{ARGS}}
+
 # Run the scripts/tables.py CLI
 thesis-tables *ARGS: _uv
     uv run scripts/tables.py {{ARGS}}

@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "altair[save]>=6.1.0",
     "click>=8.4.0",
     "huggingface-hub>=1.15.0",
     "jinja2>=3.1.6",
@@ -202,6 +203,7 @@ reportPrivateImportUsage = false # Assume that the user knows what they're doing
 
 executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
+  { root = "scripts/plots.py", reportAny = false, reportExplicitAny = false },
   { root = "scripts/tables.py", reportAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/config.py", reportExplicitAny = false },
