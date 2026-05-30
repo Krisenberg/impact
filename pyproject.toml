@@ -203,6 +203,7 @@ reportPrivateImportUsage = false # Assume that the user knows what they're doing
 
 executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
+  { root = "scripts/plots.py", reportAny = false, reportExplicitAny = false },
   { root = "scripts/tables.py", reportAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/config.py", reportExplicitAny = false },
