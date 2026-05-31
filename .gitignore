@@ -2,6 +2,8 @@
 data
 logs
 /models/*
+!notebooks/kaggle_grid_search.ipynb
+!notebooks/kaggle_sasrec_training.ipynb
 notebooks
 reports
 
