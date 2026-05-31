@@ -240,6 +240,7 @@ def main_pipeline(
         Defaults to <project_root>/models.
     """,
 )
+@inject_impact_config
 def grid_search(
     impact_config: ImpactConfig,
     log_level: str,
