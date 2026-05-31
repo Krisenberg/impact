@@ -180,7 +180,7 @@ def main_pipeline(
     logger.info("IMPACT application completed")
 
 
-@cli.command(name="tune-baseline")
+@cli.command(name="grid-search")
 @click.option(
     "--log-level",
     type=click.Choice(list(logging.getLevelNamesMapping()), case_sensitive=False),
@@ -240,7 +240,7 @@ def main_pipeline(
         Defaults to <project_root>/models.
     """,
 )
-def tune_baseline(
+def grid_search(
     impact_config: ImpactConfig,
     log_level: str,
     n_partitions: int,
