@@ -195,7 +195,16 @@ def plot_sasrec_training(
     out_dir = out_dir or PROJECT_ROOT / "reports" / "plots" / "sasrec-training"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    logs_df = pl.read_ndjson(log_file_path)
+    # -- Parse log file --
+    logs_df = pl.read_ndjson(
+        source=log_file_path,
+        infer_schema_length=None,
+        schema_overrides={
+            "epoch": pl.UInt32,
+            "train_loss": pl.Float64,
+            "val_ndcg": pl.Float64,
+        },
+    )
     epochs_df = logs_df.filter(pl.col("epoch").is_not_null()).select(
         pl.col("epoch"), pl.col("train_loss"), pl.col("val_ndcg")
     )
