@@ -162,17 +162,13 @@ def main_pipeline(
     print(f"{ds_size} val tensors:   N={tensors.val.meta[0]}")
     print(f"{ds_size} test tensors:  N={tensors.test.meta[0]}")
 
-    sasrec_training_pipeline = SASRecTrainingPipeline(
-        models_dir=models_dir,
-        config=impact_config,
-    )
-    sasrec_state_dict_path, _ = sasrec_training_pipeline.train(tensors)
+    sasrec_training_pipeline = SASRecTrainingPipeline(config=impact_config)
+    state_dict_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_best_model.pt"
+    sasrec_state_dict_path = models_dir / state_dict_filename
+    _ = sasrec_training_pipeline.train(split=tensors, save_path=sasrec_state_dict_path)
 
     evaluation_pipeline = EvaluationPipeline(impact_config)
-    metrics = evaluation_pipeline.evaluate(
-        tensors,
-        sasrec_state_dict_path=sasrec_state_dict_path,
-    )
+    metrics = evaluation_pipeline.evaluate(tensors, sasrec_state_dict_path)
 
     logger.info("Evaluation pipeline completed", **metrics)
     logger.info("IMPACT Framework configuration", **impact_config.to_dict())
