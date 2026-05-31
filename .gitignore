@@ -2,9 +2,9 @@
 data
 logs
 /models/*
+notebooks/*.ipynb
 !notebooks/kaggle_grid_search.ipynb
 !notebooks/kaggle_sasrec_training.ipynb
-notebooks
 reports
 
 # Created by https://www.toptal.com/developers/gitignore/api/python
