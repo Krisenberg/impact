@@ -1,13 +1,14 @@
 """Main entrypoint for the IMPACT application and pipelines execution."""
 
+from __future__ import annotations
+
 import dataclasses
 import datetime
 import itertools
 import json
 import logging
-from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 import dotenv
@@ -15,10 +16,14 @@ import polars as pl
 import structlog
 
 from impact.cli import inject_impact_config
-from impact.config import ImpactConfig
 from impact.logger import configure_logging
 from impact.pipelines import DataPipeline, EvaluationPipeline, SASRecTrainingPipeline
 from impact.utils import seed_everything
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from impact.config import ImpactConfig
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -301,7 +306,7 @@ def tune_baseline(
 
     logger.info("Starting hyperparameter tuning (Grid Search)...")
 
-    param_grid = {
+    param_grid: dict[str, list[Any]] = {
         # "learning_rate": [0.0002, 0.0005, 0.001, 0.002],
         "learning_rate": [0.0005, 0.001, 0.002],
         "embedding_dim": [64, 128],
