@@ -83,9 +83,10 @@ class DataPipeline:
             # Clean up potentially corrupted partial runs
             if sessions_dir.exists():
                 shutil.rmtree(sessions_dir)
-            sessions_dir.mkdir(parents=True)
 
             events_lf = self.get_raw_events()
+
+            sessions_dir.mkdir(parents=True)
 
             for i in range(n_partitions):
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
@@ -132,9 +133,10 @@ class DataPipeline:
             # Clean up potentially corrupted partial runs
             if sequences_dir.exists():
                 shutil.rmtree(sequences_dir)
-            sequences_dir.mkdir(parents=True)
 
             sessions_lf = self.get_sessions(n_partitions=n_partitions)
+
+            sequences_dir.mkdir(parents=True)
 
             for i in range(n_partitions):
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
@@ -195,12 +197,12 @@ class DataPipeline:
             if splits_dir.exists():
                 shutil.rmtree(splits_dir)
 
+            sequences_lf = self.get_sequences(n_partitions=n_partitions)
+
             item_to_idx_cache_dir.mkdir(parents=True)
             train_cache_dir.mkdir(parents=True)
             val_cache_dir.mkdir(parents=True)
             test_cache_dir.mkdir(parents=True)
-
-            sequences_lf = self.get_sequences(n_partitions=n_partitions)
 
             # Discard the result as it has to be recreated at the end either way
             # (because of caching)
