@@ -32,36 +32,31 @@ logger = structlog.stdlib.get_logger(__name__)
 class SASRecTrainingPipeline:
     """Orchestrates SASRecNBR model initialization, data loading, and training."""
 
-    def __init__(self, models_dir: Path, config: ImpactConfig) -> None:
+    def __init__(self, config: ImpactConfig) -> None:
         """Initialize the SASRecNBR training pipeline.
 
         Args:
-            models_dir: Base directory where model checkpoints are saved.
             config: Complete IMPACT Framework configuration.
         """
         self._config = config
-        self._run_models_dir = (
-            models_dir
-            / config.dataset_id
-            / config.sessionization_id
-            / config.sequencing_id
-            / config.timesplit_id
-        )
-        self._run_models_dir.mkdir(parents=True, exist_ok=True)
-        self._model_save_path = self._run_models_dir / "sasrec_best.pt"
 
-    def train(self, split: MemmapSplit) -> Path:
+    def train(self, split: MemmapSplit, save_path: Path | None = None) -> float:
         """Execute the training and validation loop.
 
         Args:
             split: The memory-mapped, tensorized train/val/test temporal splits; train
-                split is used for model training, val split is used for validation and
-                early stopping, num_items for model and dataset initialisation.
+                split is used for model training, val split for validation and early
+                stopping, num_items for model and dataset initialisation.
+            save_path: If provided, the best-performing model checkpoint is written
+                there. If None, no checkpoint is saved.
 
         Returns:
-            Path to the best-performing model checkpoint (state dict).
+            Best validation NDCG@k achieved before training terminated.
         """
-        # return self._model_save_path
+        if save_path is not None:
+            if save_path.exists():
+                raise ValueError(f"Checkpoint already exists: {save_path}")
+            save_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(
             "Initializing SASRecNBR training run",
@@ -137,14 +132,17 @@ class SASRecTrainingPipeline:
             patience=self._config.sasrec.patience,
         )
 
-        trainer.fit(
+        best_val_ndcg = trainer.fit(
             max_epochs=self._config.sasrec.max_epochs,
-            save_path=self._model_save_path,
+            save_path=save_path,
         )
 
-        logger.info(
-            "SASRecNBR training complete, best model saved",
-            best_model_path=self._model_save_path,
-        )
+        if save_path is not None:
+            logger.info(
+                "SASRecNBR training complete, best-performing model checkpoint saved",
+                best_model_path=save_path,
+            )
+        else:
+            logger.info("SASRecNBR training complete")
 
-        return self._model_save_path
+        return best_val_ndcg

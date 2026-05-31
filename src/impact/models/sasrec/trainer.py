@@ -51,18 +51,26 @@ class SASRecTrainer:
         self._k = k
         self._patience = patience
 
-    def fit(self, max_epochs: int, save_path: Path) -> None:
+    def fit(self, max_epochs: int, save_path: Path | None = None) -> float:
         """Train the model with early stopping on validation NDCG@k.
 
-        Saves the best model state dict to `save_path` whenever validation NDCG@k
-        improves. Stops early if no improvement is seen for `patience` epochs.
+        Training stops either when `max_epochs` is reached or after `patience`
+        consecutive epochs without improvement. If `save_path` is provided, the
+        best model state dict (checkpoint) is saved whenever validation NDCG@k improves;
+        if None, no checkpoint is written.
 
         Args:
             max_epochs: Maximum number of training epochs.
-            save_path: Path where the best model checkpoint will be written.
+            save_path: Path where the best model checkpoint will be written, or None to
+                skip saving.
+
+        Returns:
+            Best validation NDCG@k achieved before training terminated.
         """
-        # Ensure save directory exists
-        save_path.parent.mkdir(parents=True, exist_ok=True)
+        if save_path is not None:
+            if save_path.exists():
+                raise ValueError(f"Checkpoint already exists: {save_path}")
+            save_path.parent.mkdir(parents=True, exist_ok=True)
 
         best_ndcg = -1.0
         epochs_without_improvement = 0
@@ -88,8 +96,9 @@ class SASRecTrainer:
             if val_ndcg > best_ndcg:
                 best_ndcg = val_ndcg
                 epochs_without_improvement = 0
-                torch.save(self._model.state_dict(), save_path)
-                logger.info("New best model saved", best_ndcg=round(best_ndcg, 4))
+                if save_path is not None:
+                    torch.save(self._model.state_dict(), save_path)
+                logger.info("New best model found", best_ndcg=round(best_ndcg, 4))
             else:
                 epochs_without_improvement += 1
 
@@ -100,6 +109,8 @@ class SASRecTrainer:
                     best_ndcg=best_ndcg,
                 )
                 break
+
+        return best_ndcg
 
     def _train_epoch(self, epoch: int) -> float:
         """Run a single training epoch and return mean loss over all batches."""
