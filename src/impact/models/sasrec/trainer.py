@@ -51,15 +51,19 @@ class SASRecTrainer:
         self._k = k
         self._patience = patience
 
-    def fit(self, max_epochs: int, save_path: Path) -> None:
+    def fit(self, max_epochs: int, save_path: Path) -> float:
         """Train the model with early stopping on validation NDCG@k.
 
         Saves the best model state dict to `save_path` whenever validation NDCG@k
-        improves. Stops early if no improvement is seen for `patience` epochs.
+        improves. Training stops either when `max_epochs` is reached or after
+        `patience` consecutive epochs without improvement.
 
         Args:
             max_epochs: Maximum number of training epochs.
             save_path: Path where the best model checkpoint will be written.
+
+        Returns:
+            Best validation NDCG@k achieved before training terminated.
         """
         # Ensure save directory exists
         save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,6 +104,8 @@ class SASRecTrainer:
                     best_ndcg=best_ndcg,
                 )
                 break
+
+        return best_ndcg
 
     def _train_epoch(self, epoch: int) -> float:
         """Run a single training epoch and return mean loss over all batches."""

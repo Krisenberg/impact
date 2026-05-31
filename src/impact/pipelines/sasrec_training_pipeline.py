@@ -50,19 +50,18 @@ class SASRecTrainingPipeline:
         self._run_models_dir.mkdir(parents=True, exist_ok=True)
         self._model_save_path = self._run_models_dir / "sasrec_best.pt"
 
-    def train(self, split: MemmapSplit) -> Path:
+    def train(self, split: MemmapSplit) -> tuple[Path, float]:
         """Execute the training and validation loop.
 
         Args:
             split: The memory-mapped, tensorized train/val/test temporal splits; train
-                split is used for model training, val split is used for validation and
-                early stopping, num_items for model and dataset initialisation.
+                split is used for model training, val split for validation and early
+                stopping, num_items for model and dataset initialisation.
 
         Returns:
-            Path to the best-performing model checkpoint (state dict).
+            Tuple of (path to the best-performing model checkpoint, best validation
+            NDCG@k achieved).
         """
-        # return self._model_save_path
-
         logger.info(
             "Initializing SASRecNBR training run",
             batch_size=self._config.sasrec.batch_size,
@@ -137,7 +136,7 @@ class SASRecTrainingPipeline:
             patience=self._config.sasrec.patience,
         )
 
-        trainer.fit(
+        best_val_ndcg = trainer.fit(
             max_epochs=self._config.sasrec.max_epochs,
             save_path=self._model_save_path,
         )
@@ -147,4 +146,4 @@ class SASRecTrainingPipeline:
             best_model_path=self._model_save_path,
         )
 
-        return self._model_save_path
+        return self._model_save_path, best_val_ndcg
