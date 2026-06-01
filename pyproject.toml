@@ -28,6 +28,7 @@ dev = [
     "ipykernel>=7.2.0",
     "mypy>=2.1.0",
     "pandas-stubs>=3.0.0.260204",
+    "pytest>=9.0.3",
     "ruff>=0.15.13",
     "types-psutil>=7.2.2.20260518",
     "types-pyyaml>=6.0.12.20260518",
@@ -40,6 +41,14 @@ build-backend = "uv_build"
 
 [project.scripts]
 cli = "impact.main:cli"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = [
+    # "--tb=short",
+]
 
 [tool.ruff]
 include = [
@@ -144,6 +153,7 @@ convention = "google"  # Use the Google style in docstrings
     "S311",    # suspicious-non-cryptographic-random (acceptable in tests)
     "ARG",     # unused-function-argument (fixtures are injected, not called directly)
     "FBT",     # boolean-positional-arg (common in @pytest.mark.parametrize)
+    "D102",    # undocumented-public-method (tests often do not require docstrings)
     "D103",    # undocumented-public-function (tests often do not require docstrings)
     "E501",    # line-too-long
 ]
@@ -202,7 +212,7 @@ reportUnknownMemberType = false  # Suppress warnings from third-party libraries
 reportPrivateImportUsage = false # Assume that the user knows what they're doing
 
 executionEnvironments = [
-  { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
+  { root = "tests", reportAny = false, reportExplicitAny = false, reportPrivateUsage = false },  # Suppress specific errors in tests
   { root = "scripts/plots.py", reportAny = false, reportExplicitAny = false },
   { root = "scripts/tables.py", reportAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
