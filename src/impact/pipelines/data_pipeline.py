@@ -1,14 +1,19 @@
 """Orchestrator for the IMPACT data processing pipeline."""
 
+from __future__ import annotations
+
 import shutil
-from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import polars as pl
 import structlog
 
-from impact.config import ImpactConfig
 from impact.schemas import MemmapDataset, MemmapSplit, ParquetDataset, SequenceSplit
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from impact.config import ImpactConfig
 
 logger = structlog.stdlib.get_logger(__name__)
 

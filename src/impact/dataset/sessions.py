@@ -1,5 +1,7 @@
 """Module for processing raw events from the dataset and extracting sessions."""
 
+from __future__ import annotations
+
 import polars as pl
 import structlog
 

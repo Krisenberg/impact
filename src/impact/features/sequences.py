@@ -1,5 +1,7 @@
 """Module for extracting sequences of listening sessions from the sessionized data."""
 
+from __future__ import annotations
+
 from typing import Any
 
 import polars as pl

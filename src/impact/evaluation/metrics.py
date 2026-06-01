@@ -1,5 +1,7 @@
 """Module containing batched, fully vectorized evaluation metrics for NBR."""
 
+from __future__ import annotations
+
 import torch
 
 

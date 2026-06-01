@@ -1,18 +1,24 @@
 """Module defining the training loop for the SASRecNBR model."""
 
+from __future__ import annotations
+
 from collections.abc import Iterator
-from pathlib import Path
-from typing import cast, final
+from typing import TYPE_CHECKING, cast, final
 
 import structlog
 import torch
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from impact.evaluation.metrics import compute_ndcg_at_k, compute_recall_at_k
 from impact.models.sasrec.collate import SequenceBatch
 from impact.models.sasrec.loss import bce_loss
-from impact.models.sasrec.model import SASRecNBR
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from torch.utils.data import DataLoader
+
+    from impact.models.sasrec.model import SASRecNBR
 
 logger = structlog.stdlib.get_logger(__name__)
 

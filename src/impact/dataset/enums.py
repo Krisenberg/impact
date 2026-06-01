@@ -1,5 +1,7 @@
 """Module for defining possible dataset metadata (types and sizes)."""
 
+from __future__ import annotations
+
 from enum import StrEnum
 
 

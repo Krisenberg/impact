@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 import dataclasses
-from collections.abc import Callable
 from functools import wraps
 from typing import TYPE_CHECKING, Any
 
@@ -9,6 +10,7 @@ from impact.config import ImpactConfig, SASRecConfig
 from impact.dataset import DatasetSize, DatasetType, InteractionType
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from enum import StrEnum
 
 

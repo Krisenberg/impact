@@ -1,5 +1,7 @@
 """Module for fetching and managing Yambda datasets via HuggingFace Hub."""
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import ClassVar
 
