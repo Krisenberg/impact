@@ -1,4 +1,4 @@
-"""Module for defining possible dataset metadata (types and sizes)."""
+"""Module defining possible Yambda datasets metadata (e.g. dataset type or size)."""
 
 from __future__ import annotations
 
