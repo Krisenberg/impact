@@ -71,7 +71,7 @@ class DataPipeline:
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
 
-        from impact.dataset import extract_sessions
+        from impact.features import sessionize
 
         sessions_dir = (
             self.interim_dir / self.config.dataset_id / self.config.sessionization_id
@@ -95,7 +95,7 @@ class DataPipeline:
 
             for i in range(n_partitions):
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
-                extract_sessions(
+                sessionize(
                     events_lf=events_lf.filter(pl.col("uid") % n_partitions == i),
                     inactivity_gap_seconds=self.config.inactivity_gap_seconds,
                     tracks_per_session=self.config.tracks_per_session,

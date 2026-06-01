@@ -8,7 +8,7 @@ import structlog
 logger = structlog.stdlib.get_logger(__name__)
 
 
-def extract_sessions(
+def sessionize(
     events_lf: pl.LazyFrame,
     inactivity_gap_seconds: int = 1200,
     tracks_per_session: int = 10,  # K
@@ -38,9 +38,8 @@ def extract_sessions(
     )
 
     sessions_lf = (
-        events_lf
         # Filter out non-listen events
-        .filter(pl.col("event_type") == "listen")
+        events_lf.filter(pl.col("event_type") == "listen")
 
         # Calculate actual played time in seconds
         .with_columns(
