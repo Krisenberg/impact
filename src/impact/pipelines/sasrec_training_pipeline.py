@@ -9,13 +9,16 @@ import torch
 from torch.utils.data import DataLoader
 
 from impact.models.sasrec import (
+    EvalSequenceBatch,
+    EvalSequenceDataset,
+    EvalSequenceSample,
     SASRecNBR,
     SASRecTrainer,
-    SequenceBatch,
-    SequenceDataset,
-    SequenceSample,
-    get_collate_fn,
+    TrainSequenceBatch,
+    TrainSequenceDataset,
+    TrainSequenceSample,
     get_eval_collate_fn,
+    get_train_collate_fn,
 )
 from impact.utils import seed_worker
 
@@ -23,7 +26,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from impact.config import ImpactConfig
-    from impact.schemas import MemmapSplit
+    from impact.schemas import TensorizedSplit
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -40,13 +43,16 @@ class SASRecTrainingPipeline:
         """
         self._config = config
 
-    def train(self, split: MemmapSplit, save_path: Path | None = None) -> float:
+    def train(
+        self, split: TensorizedSplit, num_items: int, save_path: Path | None = None
+    ) -> float:
         """Execute the training and validation loop.
 
         Args:
             split: The memory-mapped, tensorized train/val/test temporal splits; train
                 split is used for model training, val split for validation and early
                 stopping, num_items for model and dataset initialisation.
+            num_items: ...
             save_path: If provided, the best-performing model checkpoint is written
                 there. If None, no checkpoint is saved.
 
@@ -66,35 +72,31 @@ class SASRecTrainingPipeline:
             max_epochs=self._config.sasrec.max_epochs,
         )
 
-        num_items = split.num_items
+        # num_items = split.num_items
         logger.info(
             "Dataset statistics loaded",
             num_items=num_items,
             train_sequences=split.train.meta[0],
         )
 
-        # Instantiate PyTorch Datasets
-        train_ds = SequenceDataset(split.train, num_items)
-        val_ds = SequenceDataset(split.val, num_items)
-
         # Setup deterministic random state
         g = torch.Generator()
         _ = g.manual_seed(self._config.seed)
 
         # Configure DataLoaders with multi-processing seed protection
-        train_loader = DataLoader[SequenceSample](
-            train_ds,
+        train_loader = DataLoader[TrainSequenceSample](
+            dataset=TrainSequenceDataset(split.train),
             batch_size=self._config.sasrec.batch_size,
             shuffle=True,
-            collate_fn=get_collate_fn(num_items),
+            collate_fn=get_train_collate_fn(num_items),
             num_workers=self._config.num_workers,
             pin_memory=True,
             worker_init_fn=seed_worker,
             generator=g,
         )
 
-        val_loader = DataLoader[SequenceSample](
-            val_ds,
+        val_loader = DataLoader[EvalSequenceSample](
+            dataset=EvalSequenceDataset(split.val),
             batch_size=self._config.sasrec.batch_size,
             shuffle=False,
             collate_fn=get_eval_collate_fn(),
@@ -124,8 +126,8 @@ class SASRecTrainingPipeline:
         # Trainer initialization and execution
         trainer = SASRecTrainer(
             model=model,
-            train_loader=cast(DataLoader[SequenceBatch], train_loader),
-            val_loader=cast(DataLoader[SequenceBatch], val_loader),
+            train_loader=cast(DataLoader[TrainSequenceBatch], train_loader),
+            val_loader=cast(DataLoader[EvalSequenceBatch], val_loader),
             optimizer=optimizer,
             device=device,
             k=self._config.sasrec.k,
