@@ -153,13 +153,11 @@ def main_pipeline(
     sequences_lf = pipeline.get_sequences(n_partitions=n_partitions)
     print(f"{ds_size} sequences_lf: {sequences_lf.select(pl.len()).collect().item()}")
 
-    splits = pipeline.get_splits(n_partitions=n_partitions)
+    splits, item_index = pipeline.get_splits(n_partitions=n_partitions)
     print(f"{ds_size} train: {splits.train.lf.select(pl.len()).collect().item()}")
     print(f"{ds_size} val: {splits.val.lf.select(pl.len()).collect().item()}")
     print(f"{ds_size} test: {splits.test.lf.select(pl.len()).collect().item()}")
-    print(
-        f"{ds_size} item-idx: {splits.item_to_idx.lf.select(pl.len()).collect().item()}"
-    )
+    print(f"{ds_size} item-idx: {item_index.num_items}")
 
     tensors = pipeline.tensorize(splits)
     n, l, k = tensors.train.meta  # noqa: E741
@@ -170,9 +168,13 @@ def main_pipeline(
     sasrec_training_pipeline = SASRecTrainingPipeline(config=impact_config)
     state_dict_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_best_model.pt"
     sasrec_state_dict_path = models_dir / state_dict_filename
-    _ = sasrec_training_pipeline.train(split=tensors, save_path=sasrec_state_dict_path)
+    _ = sasrec_training_pipeline.train(
+        split=tensors,
+        num_items=item_index.num_items,
+        save_path=sasrec_state_dict_path,
+    )
 
-    evaluation_pipeline = EvaluationPipeline(impact_config)
+    evaluation_pipeline = EvaluationPipeline(impact_config, item_index, events_lf)
     metrics = evaluation_pipeline.evaluate(tensors, sasrec_state_dict_path)
 
     logger.info("Evaluation pipeline completed", **metrics)
@@ -288,7 +290,7 @@ def grid_search(
         processed_dir=processed_data_dir,
         config=impact_config,
     )
-    splits = pipeline.get_splits(n_partitions=n_partitions)
+    splits, item_index = pipeline.get_splits(n_partitions=n_partitions)
     tensors = pipeline.tensorize(splits)
 
     logger.info(
@@ -338,6 +340,7 @@ def grid_search(
             sasrec_training_pipeline = SASRecTrainingPipeline(config=run_config)
             val_ndcg = sasrec_training_pipeline.train(
                 split=tensors,
+                num_items=item_index.num_items,
                 save_path=current_model_path,
             )
 
