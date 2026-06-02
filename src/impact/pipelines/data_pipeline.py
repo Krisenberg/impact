@@ -2,13 +2,18 @@
 
 import shutil
 from pathlib import Path
-from typing import cast
 
 import polars as pl
 import structlog
 
 from impact.config import ImpactConfig
-from impact.schemas import MemmapDataset, MemmapSplit, ParquetDataset, SequenceSplit
+from impact.schemas import (
+    ItemIndex,
+    ParquetTableSet,
+    TemporalSplit,
+    TensorizedDataset,
+    TensorizedSplit,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -160,7 +165,7 @@ class DataPipeline:
         self,
         n_partitions: int = 1,
         compute_ram_fraction: float = 0.15,
-    ) -> SequenceSplit:
+    ) -> tuple[TemporalSplit, ItemIndex]:
         """Get final train/val/test splits, computing them if not cached.
 
         Args:
@@ -222,15 +227,17 @@ class DataPipeline:
             success_marker.touch()
             logger.info("Temporal splits computed successfully")
 
-        return SequenceSplit(
-            train=ParquetDataset.from_dir(train_cache_dir),
-            val=ParquetDataset.from_dir(val_cache_dir),
-            test=ParquetDataset.from_dir(test_cache_dir),
-            item_to_idx=ParquetDataset.from_dir(item_to_idx_cache_dir),
+        split = TemporalSplit(
+            train=ParquetTableSet.from_dir(train_cache_dir),
+            val=ParquetTableSet.from_dir(val_cache_dir),
+            test=ParquetTableSet.from_dir(test_cache_dir),
         )
+        item_index = ItemIndex(table=ParquetTableSet.from_dir(item_to_idx_cache_dir))
 
-    def tensorize(self, split: SequenceSplit) -> MemmapSplit:
-        """Tensorize a given SequenceSplit into memory-mapped NumPy arrays.
+        return split, item_index
+
+    def tensorize(self, split: TemporalSplit) -> TensorizedSplit:
+        """Tensorize a given TemporalSplit into memory-mapped NumPy arrays.
 
         Converts each Parquet-backed split into dense [N, L, K] arrays suitable for
         out-of-core PyTorch training. Results are cached under the pipeline's
@@ -284,11 +291,10 @@ class DataPipeline:
             success_marker.touch()
             logger.info("Tensorized splits computed successfully")
 
-        return MemmapSplit(
-            train=MemmapDataset.from_dir(tensors_dir / "train"),
-            val=MemmapDataset.from_dir(tensors_dir / "val"),
-            test=MemmapDataset.from_dir(tensors_dir / "test"),
-            num_items=cast(int, split.item_to_idx.lf.select(pl.len()).collect().item()),
+        return TensorizedSplit(
+            train=TensorizedDataset.from_dir(tensors_dir / "train"),
+            val=TensorizedDataset.from_dir(tensors_dir / "val"),
+            test=TensorizedDataset.from_dir(tensors_dir / "test"),
         )
 
     def _save_to_cache(

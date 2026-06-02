@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 if TYPE_CHECKING:
     import numpy as np
 
-    from impact.schemas import MemmapDataset
+    from impact.schemas import TensorizedDataset
 
 
 class SequenceSample(NamedTuple):
@@ -32,7 +32,7 @@ class SequenceDataset(Dataset[SequenceSample]):
     Samples are loaded lazily via mmap, so no data is held in RAM.
     """
 
-    def __init__(self, dataset: MemmapDataset, num_items: int) -> None:
+    def __init__(self, dataset: TensorizedDataset, num_items: int) -> None:
         """Initialize the dataset.
 
         Args:

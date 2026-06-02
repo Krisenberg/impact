@@ -13,7 +13,7 @@ import polars as pl
 import structlog
 
 from impact.constants import DAY_SECONDS, MINUTE_SECONDS
-from impact.schemas import ParquetDataset, SequenceSplit
+from impact.schemas import ItemIndex, ParquetTableSet, TemporalSplit
 from impact.utils import estimate_processing_partitions
 
 if TYPE_CHECKING:
@@ -33,7 +33,7 @@ def split_sequences_train_val_test(
     val_days: float = 1.0,
     gap_minutes: float = 30.0,
     compute_ram_fraction: float = 0.15,
-) -> SequenceSplit:
+) -> tuple[TemporalSplit, ItemIndex]:
     """Compute temporal train/val/test splits and write them to Parquet files.
 
     Applies a Global Temporal Split (GTS) with dual gaps between splits to mimic
@@ -196,12 +196,14 @@ def split_sequences_train_val_test(
         transform=mapper,
     )
 
-    return SequenceSplit(
-        train=ParquetDataset.from_dir(train_dir),
-        val=ParquetDataset.from_dir(val_dir),
-        test=ParquetDataset.from_dir(test_dir),
-        item_to_idx=ParquetDataset.from_dir(item_to_idx_dir),
+    split = TemporalSplit(
+        train=ParquetTableSet.from_dir(train_dir),
+        val=ParquetTableSet.from_dir(val_dir),
+        test=ParquetTableSet.from_dir(test_dir),
     )
+    item_index = ItemIndex(table=ParquetTableSet.from_dir(item_to_idx_dir))
+
+    return split, item_index
 
 
 def _map_item_ids(
@@ -378,9 +380,9 @@ def _write_partitioned[T: pl.LazyFrame | pl.DataFrame](
             data = transform(data)
         logger.info("Writing single file (unpartitioned)")
         if isinstance(data, pl.DataFrame):
-            data.write_parquet(out_dir / ParquetDataset.file_name(partition=None))
+            data.write_parquet(out_dir / ParquetTableSet.file_name(partition=None))
         else:
-            data.sink_parquet(out_dir / ParquetDataset.file_name(partition=None))
+            data.sink_parquet(out_dir / ParquetTableSet.file_name(partition=None))
         return
 
     logger.info("Starting partitioned processing")
@@ -393,7 +395,7 @@ def _write_partitioned[T: pl.LazyFrame | pl.DataFrame](
         if transform is not None:
             part = transform(part)
 
-        partition_path = out_dir / ParquetDataset.file_name(partition=i)
+        partition_path = out_dir / ParquetTableSet.file_name(partition=i)
         if isinstance(part, pl.LazyFrame):
             part.collect().write_parquet(partition_path)
         else:

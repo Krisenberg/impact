@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from impact.config import ImpactConfig
-    from impact.schemas import MemmapSplit
+    from impact.schemas import TensorizedSplit
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -49,7 +49,7 @@ class EvaluationPipeline:
     @torch.no_grad()
     def evaluate(
         self,
-        split: MemmapSplit,
+        split: TensorizedSplit,
         sasrec_state_dict_path: Path,
     ) -> dict[str, float]:
         """Run evaluation on the test split for multiple K cut-off levels.
