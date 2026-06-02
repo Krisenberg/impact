@@ -107,6 +107,8 @@ class TensorizedDataset:
 
     _CONTEXT_FILE: ClassVar[str] = "context.npy"
     _TARGET_FILE: ClassVar[str] = "target.npy"
+    _UID_FILE: ClassVar[str] = "uid.npy"
+    _TARGET_TS_FILE: ClassVar[str] = "target_ts.npy"
     _META_FILE: ClassVar[str] = "meta.npy"
 
     directory: Path
@@ -126,6 +128,16 @@ class TensorizedDataset:
         """Path to target.npy file."""
         return self.directory / self._TARGET_FILE
 
+    @property
+    def uid_file_path(self) -> Path:
+        """Path to uid.npy file."""
+        return self.directory / self._UID_FILE
+
+    @property
+    def target_ts_file_path(self) -> Path:
+        """Path to target_ts.npy file."""
+        return self.directory / self._TARGET_TS_FILE
+
     @cached_property
     def meta(self) -> tuple[int, int, int]:
         """Tuple of (N, L, K) from meta.npy file."""
@@ -142,6 +154,16 @@ class TensorizedDataset:
         """Memory-mapped target array of shape [N, K]."""
         return cast(np.ndarray, np.load(self.target_file_path, mmap_mode="r"))
 
+    @cached_property
+    def uid(self) -> np.ndarray:
+        """Memory-mapped array with user IDs of shape [N]."""
+        return cast(np.ndarray, np.load(self.uid_file_path, mmap_mode="r"))
+
+    @cached_property
+    def target_ts(self) -> np.ndarray:
+        """Memory-mapped array with target session start timestamps of shape [N]."""
+        return cast(np.ndarray, np.load(self.target_ts_file_path, mmap_mode="r"))
+
     @classmethod
     def from_dir(cls, directory: Path) -> TensorizedDataset:
         """Reconstruct a TensorizedDataset from a directory containing tensorized files.
@@ -149,10 +171,17 @@ class TensorizedDataset:
         Raises:
             FileNotFoundError: If any of the expected array files are missing.
         """
-        expected = {cls._CONTEXT_FILE, cls._TARGET_FILE, cls._META_FILE}
-        missing = expected - {f.name for f in directory.iterdir()}
+        expected: set[str] = {
+            cls._CONTEXT_FILE,
+            cls._TARGET_FILE,
+            cls._UID_FILE,
+            cls._TARGET_TS_FILE,
+            cls._META_FILE,
+        }
+        missing: set[str] = expected - {f.name for f in directory.iterdir()}
         if missing:
             raise FileNotFoundError(f"Missing files in {directory}: {missing}")
+
         return cls(directory)
 
 

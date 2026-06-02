@@ -93,12 +93,23 @@ def tensorize(
         dtype=np.uint32,
         shape=(n_samples, L, K),
     )
-
     target_mm = np.lib.format.open_memmap(
         filename=tensorized_dataset.target_file_path,
         mode="w+",
         dtype=np.uint32,
         shape=(n_samples, K),
+    )
+    uid_mm = np.lib.format.open_memmap(
+        filename=tensorized_dataset.uid_file_path,
+        mode="w+",
+        dtype=np.uint32,
+        shape=(n_samples,),
+    )
+    target_ts_mm = np.lib.format.open_memmap(
+        filename=tensorized_dataset.target_ts_file_path,
+        mode="w+",
+        dtype=np.uint32,
+        shape=(n_samples,),
     )
 
     logger.info("Tensorizing dataset using the underlying partitioned Parquet files...")
@@ -114,10 +125,16 @@ def tensorize(
 
             contexts = batch["context"].to_list()
             targets = batch["target"].to_list()
+            uids = batch["uid"].to_list()
+            target_ts = batch["target_ts"].to_list()
+
             context_mm[offset : (offset + n)] = [
                 [session["items"] for session in context] for context in contexts
             ]
             target_mm[offset : (offset + n)] = [target["items"] for target in targets]
+            uid_mm[offset : (offset + n)] = uids
+            target_ts_mm[offset : (offset + n)] = target_ts
+
             offset += n
 
     logger.info(
@@ -125,6 +142,8 @@ def tensorize(
     )
     context_mm.flush()
     target_mm.flush()
+    uid_mm.flush()
+    target_ts_mm.flush()
     np.save(
         file=tensorized_dataset.meta_file_path,
         arr=np.array([n_samples, L, K], dtype=np.int64),
