@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from impact.evaluation.metrics import compute_ndcg_at_k, compute_recall_at_k
-from impact.models.sasrec.collate import SequenceBatch
+from impact.models.sasrec.collate import EvalSequenceBatch, TrainSequenceBatch
 from impact.models.sasrec.loss import bce_loss
 from impact.models.sasrec.model import SASRecNBR
 
@@ -24,8 +24,8 @@ class SASRecTrainer:
     def __init__(
         self,
         model: SASRecNBR,
-        train_loader: DataLoader[SequenceBatch],
-        val_loader: DataLoader[SequenceBatch],
+        train_loader: DataLoader[TrainSequenceBatch],
+        val_loader: DataLoader[EvalSequenceBatch],
         optimizer: torch.optim.Optimizer,
         device: torch.device,
         k: int = 10,
@@ -118,7 +118,7 @@ class SASRecTrainer:
         total_loss = 0.0
 
         pbar = tqdm(
-            iterable=cast(Iterator[SequenceBatch], iter(self._train_loader)),
+            iterable=cast(Iterator[TrainSequenceBatch], iter(self._train_loader)),
             desc=f"Epoch {epoch}",
             leave=False,
         )
@@ -147,7 +147,7 @@ class SASRecTrainer:
         return total_loss / len(self._train_loader)
 
     @torch.no_grad()
-    def _evaluate(self, loader: DataLoader[SequenceBatch]) -> tuple[float, float]:
+    def _evaluate(self, loader: DataLoader[EvalSequenceBatch]) -> tuple[float, float]:
         """Evaluate the model over a given dataloader.
 
         Negatives are not used during evaluation - scoring is against the full item
@@ -163,7 +163,7 @@ class SASRecTrainer:
         ndcg_sum, recall_sum = 0.0, 0.0
         total_samples = 0
 
-        for batch in cast(Iterator[SequenceBatch], iter(loader)):
+        for batch in cast(Iterator[EvalSequenceBatch], iter(loader)):
             batch = batch.to(self._device)
             context = batch.context
             target = batch.positive
