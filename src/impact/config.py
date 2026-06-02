@@ -93,6 +93,7 @@ class ImpactConfig:
     # === Evaluation ===
     eval_ks: tuple[int, ...] = (5, 10, 40, 100)
     """Tuple of K cut-off values for computing NDCG@K and Recall@K during evaluation."""
+    alpha: float = 0.5
 
     # === System / Hardware ===
     seed: int = 42
