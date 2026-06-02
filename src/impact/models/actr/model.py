@@ -6,7 +6,7 @@ import torch
 
 
 @final
-class ACTRModel:
+class ACTR:
     """Intention-Modulated Personalized ACT-R (P-Pop) model.
 
     The model operates as a plain Python class without trainable parameters. Tensors are
