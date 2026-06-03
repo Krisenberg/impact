@@ -1,5 +1,3 @@
-"""Module for collating sequence samples into batches."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

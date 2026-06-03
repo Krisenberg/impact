@@ -1,5 +1,3 @@
-"""Module defining the SASRec model architecture adapted for NBR paradigm."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar, cast, final, override
@@ -15,9 +13,9 @@ if TYPE_CHECKING:
 class SASRecNBR(nn.Module):
     """SASRec adapted for Next-Basket Recommendation.
 
-    Sessions of K items are mean-pooled into session vectors, then processed by a
-    Transformer encoder over L context sessions. The last hidden state serves as the
-    user intent vector for downstream scoring.
+    Sessions of K items (baskets) are mean-pooled into session vectors and processed by
+    a Transformer encoder over L context sessions. The final hidden state is used as
+    the user intent vector for scoring.
     """
 
     LAYER_NORM_EPS: ClassVar[float] = 1e-9
@@ -25,7 +23,7 @@ class SASRecNBR(nn.Module):
     def __init__(
         self,
         num_items: int,
-        context_sessions: int = 20,  # L
+        context_sessions: int = 20,
         embedding_dim: int = 64,
         num_heads: int = 2,
         num_layers: int = 2,
@@ -37,21 +35,20 @@ class SASRecNBR(nn.Module):
         """Initialize the SASRecNBR model.
 
         Args:
-            num_items: Total number of unique items (tracks). The embedding table has
-                size of (num_items + 1) with index 0 reserved for padding.
+            num_items: Catalog size. Embedding table is (num_items + 1), with index
+                0 reserved for padding.
             context_sessions: Number of historical sessions used as context. Denoted as
                 L in the thesis.
             embedding_dim: Dimension of item and positional embeddings.
-            num_heads: Number of attention heads in each Transformer layer.
+            num_heads: Number of attention heads per Transformer layer.
             num_layers: Number of Transformer encoder layers.
-            dropout: Dropout probability applied after embedding and within each layer.
-            dim_feedforward: FFN hidden dimension. Defaults to 4 * embedding_dim.
-            activation: Transformer FFN activation. Defaults to GELU.
+            dropout: Dropout probability after embedding and within each layer.
+            dim_feedforward: FFN hidden size. Defaults to 4 * embedding_dim.
+            activation: FFN activation. Defaults to GELU.
             initializer_range: Standard deviation for normal weight initialization.
         """
         super().__init__()
-        self._num_items = num_items
-        self._context_sessions = context_sessions
+        self.num_items = num_items
         self._initializer_range = initializer_range
 
         # Reserve index 0 for padding, valid item indices must start at 1
@@ -87,7 +84,7 @@ class SASRecNBR(nn.Module):
         return self._item_embeddings
 
     def _init_weights(self) -> None:
-        """Initialize all model weights using a truncated normal distribution.
+        """Initialize model weights using a truncated normal distribution.
 
         Truncated normal distribution is used for embeddings and linear layers,
         zeros for biases, ones/zeros for LayerNorm. Padding index is explicitly zeroed
@@ -110,17 +107,16 @@ class SASRecNBR(nn.Module):
                 _ = nn.init.zeros_(module.bias)
 
     def encode(self, context: torch.Tensor) -> torch.Tensor:
-        """Encode a batch of sequences of sessions into a single user intent vector.
+        """Encode a batch of context sessions into a user intent vector.
 
-        Item embeddings within each session are mean-pooled (padding-aware) to form
-        session vectors. Positional embeddings are added before Transformer processing.
+        Item embeddings are mean-pooled per session (padding-aware), positional
+        embeddings are added, then the sequence is passed through the Transformer.
 
         Args:
-            context: Item indices for L context sessions of shape [B, L, K]. Zero
-                indicates padding (item not found in the training set).
+            context: [B, L, K] context session item indices. Zero indicates padding.
 
         Returns:
-            Intent vector of shape [B, D] taken from the last hidden state tensor.
+            User intent vector of shape [B, D] from the last hidden state.
         """
         batch_size, seq_len, _ = context.shape
 
@@ -132,7 +128,6 @@ class SASRecNBR(nn.Module):
 
         # Mean pooling (NBR core): [B, L, K, D] -> [B, L, D]
         # Average across the K dimension to construct a single session representation
-        # session_vectors = item_vectors.mean(dim=2)
         session_vectors = item_vectors.sum(dim=2) / mask.sum(dim=2).clamp(min=1)
 
         # Add learned positional embeddings
@@ -163,46 +158,50 @@ class SASRecNBR(nn.Module):
         hidden_state: torch.Tensor,
         item_indices: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute dot-product scores between an intent vector and selected items.
+        """Score the intent vector against a set of items.
 
-        Intended for training against explicit positive/negative item sets.
+        Used during training against explicit positive/negative sets.
 
         Args:
-            hidden_state: Intent vector of shape [B, D].
-            item_indices: Item indices of shape [B, K].
+            hidden_state: [B, D] intent vector.
+            item_indices: [B, K] item indices to score.
 
         Returns:
-            Scores of shape [B, K].
+            Scores (logits) of shape [B, K].
         """
+        # Lookup item embeddings: [B, K] -> [B, K, D]
         item_embeddings = cast(torch.Tensor, self._item_embeddings(item_indices))
+        # Sum([B, 1, D] * [B, K, D], dim=-1) -> [B, K]
         return torch.sum(hidden_state.unsqueeze(1) * item_embeddings, dim=-1)
 
     def score_all_items(self, hidden_state: torch.Tensor) -> torch.Tensor:
-        """Score the intent vector against the full item catalog.
+        """Score the intent vector against the full catalog.
 
-        Intended for evaluation and ranking. Padding index 0 is masked to -inf.
+        Used during evaluation. Padding index 0 is masked to -inf.
 
         Args:
-            hidden_state: Intent vector of shape [B, D].
+            hidden_state: [B, D] intent vector.
 
         Returns:
-            Logits of shape [B, num_items + 1] with index 0 masked.
+            Scores (logits) of shape [B, num_items + 1].
         """
-        item_embeddings = self._item_embeddings.weight  # [num_items + 1, embed_dim]
+        # Get all item embeddings: # [num_items + 1, D]
+        item_embeddings = self._item_embeddings.weight
+        # Matrix multiplication: [B, D] * [D, num_items + 1] -> [B, num_items + 1]
         logits = torch.matmul(hidden_state, item_embeddings.t())
 
         # Mask out the padding index (0) so it is never recommended
         logits = logits.masked_fill(
-            mask=torch.arange(logits.size(1), device=logits.device) == 0,
+            mask=(torch.arange(logits.size(1), device=logits.device) == 0),
             value=-torch.inf,
         )
         return logits
 
     @override
     def forward(self, context: torch.Tensor) -> torch.Tensor:
-        """Encode context into a user intent vector. See `encode()`.
+        """Encode context into a user intent vector. Delegates to `encode()`.
 
-        Scoring is intentionally decoupled, use `score_items()` for training
-        or `score_all_items()` for evaluation.
+        Scoring is decoupled: use `score_items()` for training and `score_all_items()`
+        for evaluation.
         """
         return self.encode(context)

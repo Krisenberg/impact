@@ -1,18 +1,19 @@
-"""Module defining training loss functions for SASRec."""
-
 import torch
 import torch.nn.functional as F  # noqa: N812
 
 
 def bce_loss(pos_scores: torch.Tensor, neg_scores: torch.Tensor) -> torch.Tensor:
-    """Compute the pointwise Binary Cross-Entropy loss.
+    """Pointwise BCE loss over positive and negative item scores.
+
+    Computes BCE(pos_scores, 1) + BCE(neg_scores, 0) where each term is averaged over
+    the batch.
 
     Args:
-        pos_scores: Logit scores for ground-truth items [B, K].
-        neg_scores: Logit scores for randomly sampled negative items [B, K].
+        pos_scores: Positive item logits [B, K].
+        neg_scores: Negative item logits [B, K].
 
     Returns:
-        A scalar tensor containing the mean BCE loss over the batch.
+        Scalar mean BCE loss.
     """
     pos_loss = F.binary_cross_entropy_with_logits(
         input=pos_scores,

@@ -1,5 +1,3 @@
-"""Module defining PyTorch Datasets for sequence-based (NBR) music recommendation."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, NamedTuple, override
