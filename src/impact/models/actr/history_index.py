@@ -1,5 +1,3 @@
-"""Module for in-memory extraction and indexing of user histories for ACT-R scoring."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -16,9 +14,11 @@ logger = structlog.stdlib.get_logger(__name__)
 
 
 class ACTRHistoryIndex:
-    """In-memory index of user event histories required for ACT-R scoring.
+    """In-memory index of user event histories for ACT-R scoring.
 
-    Enables O(1) per-user history lookups via `query(uid, t_cutoff)`.
+    Indexed once at construction from the raw event log; individual user histories are
+    retrieved via `query(uid, t_cutoff)`. Only eval-split users are indexed to minimize
+    RAM usage.
     """
 
     def __init__(
@@ -27,14 +27,17 @@ class ACTRHistoryIndex:
         eval_uids: list[int] | pl.Series,
         item_index: ItemIndex,
     ) -> None:
-        """Initialize the ACTRHistoryIndex.
+        """Index event histories for the given evaluation users.
+
+        Filters down to listen events, maps item IDs to the contiguous training items
+        index space (dropping cold-start items), and stores per-user arrays sorted by
+        timestamp for efficient cutoff slicing.
 
         Args:
-            events_lf: LazyFrame containing all event types (interactions).
-            eval_uids: User IDs present in the evaluation (test) split; only these are
-                indexed.
-            item_index: Item-to-index mapping used to translate item IDs to the
-                contiguous index space.
+            events_lf: LazyFrame of all interaction events.
+            eval_uids: User IDs in the evaluation split; only these are indexed.
+            item_index: Item-to-index mapping for ID translation derived from the
+                training split.
         """
         logger.info(
             "Filtering, mapping, and indexing raw event history for eval users...",
@@ -79,15 +82,16 @@ class ACTRHistoryIndex:
         uid: int,
         t_cutoff: int,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return ACT-R input tensors for a user, restricted to events before a cutoff.
+        """Return ACT-R input tensors for user events strictly before t_cutoff.
 
         Args:
-            uid: User ID to query.
-            t_cutoff: Timestamp cutoff (exclusive); typically the target session start.
+            uid: User to query.
+            t_cutoff: Exclusive timestamp cutoff, typically a timestamp of the first
+                event of the target session.
 
         Returns:
-            Tuple of (item_ids, time_deltas, is_organic), each a 1D tensor.
-            Returns three empty tensors if the user has no history before the cutoff.
+            (item_ids, time_deltas, is_organic) as 1D tensors. All three are empty if
+            the user has no history before the cutoff.
         """
         empty_history = (
             torch.empty(0, dtype=torch.long),
