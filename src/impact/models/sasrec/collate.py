@@ -15,12 +15,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class TrainSequenceBatch:
-    """Batch of sequence samples with in-batch negative sampling.
+    """One training batch with negatives sampled in-batch.
 
     Attributes:
-        context:  Item indices for L context sessions of shape [B, L, K].
-        positive: Item indices for the target session of shape [B, K].
-        negative: Sampled negative item indices of shape [B, K].
+        context: [B, L, K] context session item indices.
+        positive: [B, K] target session item indices.
+        negative: [B, K] uniformly sampled negative item indices.
     """
 
     context: torch.Tensor
@@ -54,7 +54,16 @@ class TrainSequenceBatch:
 
 @dataclass(frozen=True)
 class EvalSequenceBatch:
-    """..."""
+    """One evaluation batch, carrying per-sample metadata needed for ACT-R scoring.
+
+    No negative samples here as evaluation ranks against the full catalog.
+
+    Attributes:
+        uid:       [B] user IDs, used to look up ACT-R history.
+        target_ts: [B] timestamps of the target session (temporal cutoff for ACT-R).
+        context:   [B, L, K] context session item indices.
+        positive:  [B, K] target session item indices.
+    """
 
     uid: torch.Tensor
     target_ts: torch.Tensor
@@ -91,22 +100,20 @@ class EvalSequenceBatch:
 def get_train_collate_fn(
     num_items: int,
 ) -> Callable[[list[TrainSequenceSample]], TrainSequenceBatch]:
-    """Return a collate function that assembles a SequenceBatch with sampled negatives.
+    """Return a collate function that assembles training batches with sampled negatives.
 
-    In the current implementation, negatives are sampled uniformly from [1, num_items]
-    without strict exclusion of positives. Given the catalog size (number of tracks),
-    collisions are rare enough to be acceptable.
+    Uniform sampling from [1, num_items] is valid because item IDs have been mapped
+    to a contiguous index space during preprocessing, so every integer in that range
+    corresponds to a real item. Strict positive exclusion is omitted; given the catalog
+    size (number of tracks) the collision rate is negligible.
 
     Args:
-        num_items: Total number of unique items (tracks); defines the sampling range.
+        num_items: Catalog size; defines the upper bound for negative sampling.
     """
 
     def _collate(batch: list[TrainSequenceSample]) -> TrainSequenceBatch:
         contexts = torch.stack([s.context for s in batch])
         positives = torch.stack([s.target for s in batch])
-
-        # Currently not a 'strict negative sampling' but taking into account the catalog
-        # size, it might be enough
         negatives = torch.randint(1, num_items + 1, positives.shape, dtype=torch.long)
 
         # Possible way to enforce strict negative sampling
@@ -121,24 +128,18 @@ def get_train_collate_fn(
 
 
 def get_eval_collate_fn() -> Callable[[list[EvalSequenceSample]], EvalSequenceBatch]:
-    """Return a collate function for evaluation, omitting negative sampling.
+    """Return a collate function that assembles evaluation batches.
 
-    The returned batch has an empty `negative` tensor, as evaluation scores against
-    the full item catalog either way.
+    Includes uid and target_ts metadata required for ACT-R scoring. Skips negative
+    sampling as evaluation scores against the full catalog directly.
     """
 
     def _collate(batch: list[EvalSequenceSample]) -> EvalSequenceBatch:
-        uids = torch.tensor([s.uid for s in batch], dtype=torch.long)
-        target_tss = torch.tensor([s.target_ts for s in batch], dtype=torch.long)
-
-        contexts = torch.stack([s.context for s in batch])
-        positives = torch.stack([s.target for s in batch])
-
         return EvalSequenceBatch(
-            uid=uids,
-            target_ts=target_tss,
-            context=contexts,
-            positive=positives,
+            uid=torch.tensor([s.uid for s in batch], dtype=torch.long),
+            target_ts=torch.tensor([s.target_ts for s in batch], dtype=torch.long),
+            context=torch.stack([s.context for s in batch]),
+            positive=torch.stack([s.target for s in batch]),
         )
 
     return _collate
