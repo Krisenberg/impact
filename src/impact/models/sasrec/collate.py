@@ -59,10 +59,10 @@ class EvalSequenceBatch:
     No negative samples here as evaluation ranks against the full catalog.
 
     Attributes:
-        uid:       [B] user IDs, used to look up ACT-R history.
+        uid: [B] user IDs, used to look up ACT-R history.
         target_ts: [B] timestamps of the target session (temporal cutoff for ACT-R).
-        context:   [B, L, K] context session item indices.
-        positive:  [B, K] target session item indices.
+        context: [B, L, K] context session item indices.
+        positive: [B, K] target session item indices.
     """
 
     uid: torch.Tensor

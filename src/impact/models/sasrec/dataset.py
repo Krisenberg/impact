@@ -14,11 +14,11 @@ if TYPE_CHECKING:
 
 
 class TrainSequenceSample(NamedTuple):
-    """Sample containing only tensors required for SASRecNBR training.
+    """One training example: a context sequence and its target session.
 
     Attributes:
-        context: Tensor of shape [L, K] with track indices from L context sessions.
-        target: Tensor of shape [K] with track indices from the target session (L+1).
+        context: [L, K] context session item indices.
+        target: [K] target session item indices (session L+1).
     """
 
     context: torch.Tensor
@@ -26,13 +26,13 @@ class TrainSequenceSample(NamedTuple):
 
 
 class EvalSequenceSample(NamedTuple):
-    """Sample containing tensors and sequence metadata required for evaluation.
+    """One evaluation example (context+target), with metadata needed for ACT-R scoring.
 
     Attributes:
-        uid: User ID.
-        target_ts: Timestamp of the target session (first listen event).
-        context: Tensor of shape [L, K] with track indices from L context sessions.
-        target: Tensor of shape [K] with track indices from the target session (L+1).
+        uid: User ID, used to query ACT-R history.
+        target_ts: Timestamp denoting the start of target session (cutoff for ACT-R).
+        context: [L, K] context session item indices.
+        target: [K] target session item indices (session L+1).
     """
 
     uid: int
@@ -42,18 +42,13 @@ class EvalSequenceSample(NamedTuple):
 
 
 class TrainSequenceDataset(Dataset[TrainSequenceSample]):
-    """PyTorch Dataset over memory-mapped (context, target) sequence arrays.
+    """Memory-mapped dataset for training.
 
-    Samples are loaded lazily via memory mapping. Each tensor is copied on access for
-    safe use with multi-process DataLoader workers.
+    Samples are loaded lazily via  memory mapping and copied on access for safe use
+    with multi-process DataLoader workers.
     """
 
     def __init__(self, dataset: TensorizedDataset) -> None:
-        """Initialize the training dataset.
-
-        Args:
-            dataset: Tensorized split with memory-mapped context and target arrays.
-        """
         super().__init__()
         self.context: np.ndarray = dataset.context  # [N, L, K]
         self.target: np.ndarray = dataset.target  # [N, K]
@@ -70,25 +65,17 @@ class TrainSequenceDataset(Dataset[TrainSequenceSample]):
 
 
 class EvalSequenceDataset(Dataset[EvalSequenceSample]):
-    """PyTorch Dataset over memory-mapped sequence arrays for evaluation.
+    """Memory-mapped dataset for evaluation.
 
-    Extends the training view with per-sample metadata (uid, target_ts) required for
-    temporal cutoff filtering in the ACT-R scorer and for aggregating per-user metrics
-    during evaluation.
-
-    Samples are loaded lazily via memory mapping. Each tensor is copied on access for
-    safe use with multi-process DataLoader workers.
+    Extends the training view with uid and target_ts metadata required for ACT-R scoring
+    and per-user metric aggregation. Samples are loaded lazily via  memory mapping and
+    copied on access for safe use with multi-process DataLoader workers.
     """
 
     def __init__(self, dataset: TensorizedDataset) -> None:
-        """Initialize the evaluation dataset.
-
-        Args:
-            dataset: Tensorized split with memory-mapped context and target arrays.
-        """
         super().__init__()
-        self.uids: np.ndarray = dataset.uid  # [N]
-        self.target_tss: np.ndarray = dataset.target_ts  # [N]
+        self.uid: np.ndarray = dataset.uid  # [N]
+        self.target_ts: np.ndarray = dataset.target_ts  # [N]
         self.context: np.ndarray = dataset.context  # [N, L, K]
         self.target: np.ndarray = dataset.target  # [N, K]
 
@@ -98,8 +85,8 @@ class EvalSequenceDataset(Dataset[EvalSequenceSample]):
     @override
     def __getitem__(self, idx: int) -> EvalSequenceSample:
         return EvalSequenceSample(
-            uid=int(self.uids[idx]),
-            target_ts=int(self.target_tss[idx]),
+            uid=int(self.uid[idx]),
+            target_ts=int(self.target_ts[idx]),
             context=torch.from_numpy(self.context[idx].copy()).long(),
             target=torch.from_numpy(self.target[idx].copy()).long(),
         )
