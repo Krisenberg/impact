@@ -6,7 +6,7 @@ import structlog
 logger = structlog.stdlib.get_logger(__name__)
 
 
-def extract_sessions(
+def sessionize(
     events_lf: pl.LazyFrame,
     inactivity_gap_seconds: int = 1200,
     tracks_per_session: int = 10,  # K
