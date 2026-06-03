@@ -118,7 +118,7 @@ class DataPipeline:
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
 
-        from impact.features import extract_sequences
+        from impact.features import sequence
 
         sequences_dir = (
             self.interim_dir
@@ -146,7 +146,7 @@ class DataPipeline:
             for i in range(n_partitions):
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
 
-                extract_sequences(
+                sequence(
                     sessions_lf=sessions_lf.filter(pl.col("uid") % n_partitions == i),
                     context_sessions=self.config.context_sessions,
                     step=self.config.step,
@@ -179,7 +179,7 @@ class DataPipeline:
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
 
-        from impact.features import split_sequences_train_val_test
+        from impact.features import split
 
         splits_dir = (
             self.processed_dir
@@ -211,7 +211,7 @@ class DataPipeline:
 
             # Discard the result as it has to be recreated at the end either way
             # (because of caching)
-            _ = split_sequences_train_val_test(
+            _ = split(
                 sequences_lf=sequences_lf,
                 train_dir=train_cache_dir,
                 val_dir=val_cache_dir,

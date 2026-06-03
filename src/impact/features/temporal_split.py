@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = structlog.stdlib.get_logger(__name__)
 
 
-def split_sequences_train_val_test(
+def split(
     sequences_lf: pl.LazyFrame,
     train_dir: Path,
     val_dir: Path,
