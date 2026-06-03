@@ -99,16 +99,15 @@ class ACTRHistoryIndex:
         if user_data is None:
             return empty_history
 
-        # Mask events strictly before the cutoff (target session start)
+        # Get events strictly before the cutoff (target session start)
         timestamps = user_data["timestamps"]
-        mask = timestamps < t_cutoff
-
-        item_ids_raw = user_data["item_ids"][mask]
-        timestamps_raw = timestamps[mask]
-        is_organic_raw = user_data["is_organic"][mask]
-
-        if len(item_ids_raw) == 0:
+        cutoff_idx = np.searchsorted(timestamps, t_cutoff, side="left")
+        if cutoff_idx == 0:
             return empty_history
+
+        item_ids_raw = user_data["item_ids"][:cutoff_idx]
+        timestamps_raw = timestamps[:cutoff_idx]
+        is_organic_raw = user_data["is_organic"][:cutoff_idx]
 
         # Delta_t = t_ref - t_k
         time_deltas_raw = (t_cutoff - timestamps_raw).astype(np.float32)
