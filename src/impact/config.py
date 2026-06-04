@@ -1,28 +1,107 @@
-"""Module defining the IMPACT Framework configuration."""
+from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from dataclasses import asdict, dataclass, field
+from enum import Enum
+from functools import cached_property
+from typing import TYPE_CHECKING, Any
 
 from impact.dataset import DatasetSize, DatasetType, InteractionType
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+@dataclass(frozen=True)
+class DatasetConfig:
+    """Configuration for the Yambda dataset fetcher."""
+
+    size: DatasetSize = DatasetSize.SIZE_50M
+    """Yambda dataset variant to process (50M, 500M, or 5B)."""
+
+    format: DatasetType = DatasetType.FLAT
+    """Yambda dataset format type. Currently only FLAT is supported."""
+
+    interaction_type: InteractionType = InteractionType.MULTI_EVENT
+    """Type of interactions (events) to load from the Yambda dataset.
+
+    MULTI_EVENT includes all event types (listen, like, etc.); other variants contain
+    only a specific subset.
+    """
+
+    def __post_init__(self) -> None:
+        """Verify that the selected dataset format is supported."""
+        if self.format != DatasetType.FLAT:
+            raise ValueError(f"Dataset format {self.format} not supported.")
+
+
+@dataclass(frozen=True)
+class SessionConfig:
+    """Configuration for the sessionization stage (Algorithm 1 in the thesis)."""
+
+    inactivity_gap_seconds: int = 1200
+    """Number of seconds of inactivity before a session is considered finished."""
+
+    tracks_per_session: int = 10
+    """Number of tracks that constitute a session. Denoted as K in the thesis.
+
+    Sessions with less than K tracks are discarded. Sessions with more than K tracks
+    are truncated.
+    """
+
+    min_listen_seconds: int = 30
+    """Minimum playback duration (in seconds) to consider an event as a valid listen.
+
+    Defaults to 30 (industry standard used by authors of other publications).
+    """
+
+
+@dataclass(frozen=True)
+class SequenceConfig:
+    """Configuration for the sequence extraction stage (Algorithm 2 in the thesis)."""
+
+    context_sessions: int = 20
+    """Number of historical sessions used as context. Denoted as L in the thesis."""
+
+    step: int = 5
+    """Step size for the sliding window sequence extraction."""
+
+
+@dataclass(frozen=True)
+class GTSConfig:
+    """Configuration for the temporal split (GTS) stage (Algorithm 3 in the thesis)."""
+
+    test_days: float = 1.0
+    """Number of days at the end of the timeline allocated for the test set."""
+
+    val_days: float = 1.0
+    """Number of days preceding test set allocated for the validation set."""
+
+    gap_minutes: float = 30.0
+    """Buffer time (in minutes) between dataset splits.
+
+    The purpose of this parameter is to mimic production system deployment latency.
+    """
 
 
 @dataclass(frozen=True)
 class ACTRConfig:
-    """Configuration for the Intention-Modulated Personalized ACT-R (P-Pop) scorer."""
+    """Configuration for the ACT-R (P-Pop) scorer."""
 
     decay: float = 0.5
     """Power-law time decay exponent. Denoted as d in the thesis.
 
     Higher values result in older listens being forgotten faster.
     """
+
     organic_weight: float = 1.0
     """Contribution weight for organic (user-initiated) listens."""
+
     autoplay_weight: float = 0.5
     """Contribution weight for autoplay (recsys-initiated) listens."""
+
     eps: float = 1e-8
-    """Numerical floor added before log to prevent log(0) for unseen catalog items."""
+    """Numerical floor added before applying log to prevent log(0)."""
 
 
 @dataclass(frozen=True)
@@ -31,20 +110,28 @@ class SASRecConfig:
 
     embedding_dim: int = 64
     """Dimension of item and positional embeddings."""
+
     num_heads: int = 2
     """Number of attention heads in each Transformer layer."""
+
     num_layers: int = 2
     """Number of Transformer encoder layers."""
+
     dropout_rate: float = 0.2
     """Dropout probability applied after embedding within each layer."""
+
     batch_size: int = 2048
     """Number of sequences per training batch."""
+
     max_epochs: int = 100
     """Maximum number of training epochs to run."""
+
     learning_rate: float = 0.001
     """Learning rate for the optimizer."""
-    k_cutoff: int = 10
-    """Cutoff for NDCG@K and Recall@K metrics used during model training."""
+
+    val_k_cutoff: int = 10
+    """Rank cutoff for NDCG@K and Recall@K metrics used during model training."""
+
     patience: int = 10
     """Number of epochs to wait for validation improvement before stopping."""
 
@@ -56,10 +143,13 @@ class EvalConfig:
     batch_size: int = 512
     """Number of sequences per evaluation batch.
 
-    Should be lower than `SASRecConfig.batch_size` due to full-catalog scoring.
+    Should be lower than training batch size due to full-catalog scoring memory
+    requirements.
     """
+
     k_cutoffs: tuple[int, ...] = (5, 10, 40, 100)
     """Rank cutoffs for computing NDCG@K and Recall@K during evaluation."""
+
     alpha: float = 0.5
     """Relative contribution of SASRec and ACT-R in the final late-fusion score.
 
@@ -73,6 +163,21 @@ class EvalConfig:
 
 
 @dataclass(frozen=True)
+class SystemConfig:
+    """System-level parameters for reproducibility and runtime behavior."""
+
+    seed: int = 42
+    """Global random seed for strict reproducibility."""
+
+    num_workers: int = 4
+    """Number of subprocesses to use for data loading.
+
+    Set to 0 to load data in the main process, or higher for parallel loading
+    (hardware-dependent).
+    """
+
+
+@dataclass(frozen=True)
 class ImpactConfig:
     """Immutable configuration for the IMPACT Framework.
 
@@ -82,245 +187,119 @@ class ImpactConfig:
     file for exact reconstruction of any pipeline artifact.
     """
 
-    # === Dataset ===
-    dataset_size: DatasetSize
-    """Yambda dataset variant to process (50M, 500M, or 5B)."""
-    dataset_type: DatasetType = DatasetType.FLAT
-    """Dataset format type. Currently only FLAT is supported."""
-    interaction_type: InteractionType = InteractionType.MULTI_EVENT
-    """Type of interactions to load from the Yambda dataset.
+    dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    """Configuration for the Yambda dataset fetcher."""
 
-    MULTI_EVENT includes all event types (listen, like, etc.); other variants contain
-    only a specific subset.
-    """
+    session: SessionConfig = field(default_factory=SessionConfig)
+    """Configuration for the sessionization stage (Algorithm 1 in the thesis)."""
 
-    # === Sessions ===
-    inactivity_gap_seconds: int = 1200
-    """Number of seconds of inactivity before a session is considered finished."""
-    tracks_per_session: int = 10
-    """Number of tracks that consitute a session. Denoted as K in the thesis.
+    sequence: SequenceConfig = field(default_factory=SequenceConfig)
+    """Configuration for the sequence extraction stage (Algorithm 2 in the thesis)."""
 
-    Sessions with less than K tracks are discarded. Sessions with more than K tracks are
-    truncated.
-    """
-    min_listen_seconds: int = 30
-    """Minimum playback duration (in seconds) to consider an event as a valid listen.
+    gts: GTSConfig = field(default_factory=GTSConfig)
+    """Configuration for the temporal split (GTS) stage (Algorithm 3 in the thesis)."""
 
-    Defaults to 30 (industry standard used by authors of other publications).
-    """
-
-    # === Sequences ===
-    context_sessions: int = 20
-    """Number of historical sessions used as context. Denoted as L in the thesis."""
-    step: int = 5
-    """Step size for the sliding window sequence generation."""
-
-    # === Timesplit (GTS) ===
-    test_days: float = 1.0
-    """Number of days at the end of the timeline allocated for the test set."""
-    val_days: float = 1.0
-    """Number of days preceding test set allocated for the validation set."""
-    gap_minutes: float = 30.0
-    """Buffer time (in minutes) between dataset splits.
-
-    The purpose of this parameter is to mimic production system deployment latency.
-    """
-
-    # === ACTR ===
     actr: ACTRConfig = field(default_factory=ACTRConfig)
-    """Configuration for the Intention-Modulated Personalized ACT-R (P-Pop) scorer."""
+    """Configuration for the ACT-R (P-Pop) scorer."""
 
-    # === SASRecNBR ===
     sasrec: SASRecConfig = field(default_factory=SASRecConfig)
     """Configuration for the SASRecNBR model."""
 
-    # === Evaluation ===
     eval: EvalConfig = field(default_factory=EvalConfig)
     """Configuration for the late-fusion evaluation of SASRecNBR and ACT-R (IMPACT)."""
 
-    # === System / Hardware ===
-    seed: int = 42
-    """Global random seed for strict reproducibility."""
-    num_workers: int = 4
-    """Number of subprocesses to use for data loading.
-
-    Set to 0 to load data in the main process, or higher for parallel loading
-    (hardware-dependent).
-    """
-
-    def __post_init__(self) -> None:
-        """Verify that the selected dataset type is supported."""
-        if self.dataset_type != DatasetType.FLAT:
-            raise ValueError(f"Dataset type {self.dataset_type} not supported.")
+    system: SystemConfig = field(default_factory=SystemConfig)
+    """System-level parameters for reproducibility and runtime behavior."""
 
     @staticmethod
-    def _format_float_value(val: float) -> str:
-        """Format float values to be filesystem-friendly (no dots)."""
-        return f"{int(val)}" if val.is_integer() else str(val).replace(".", "-")
+    def _format_value(val: float, dot_replacement: str = "-") -> str:
+        """Format float values to be filesystem-friendly (replace dots)."""
+        if val.is_integer():
+            return str(int(val))
+        return str(val).replace(".", dot_replacement)
 
-    @property
+    @cached_property
     def dataset_id(self) -> str:
         """Cache key for the raw data fetching stage."""
-        return "_".join([
+        parts = [
             "dataset",
-            self.dataset_size,
-            self.dataset_type,
-            self.interaction_type,
-        ])  # fmt: skip
+            self.dataset.size.value,
+            self.dataset.format.value,
+            self.dataset.interaction_type.value,
+        ]
+        return "_".join(parts)
 
-    @property
+    @cached_property
     def sessionization_id(self) -> str:
-        """Cache key for the session extraction stage (Algorithm 1 in the thesis)."""
-        return "_".join([
+        """Cache key for the sessionization stage (Algorithm 1 in the thesis)."""
+        parts = [
             "sessions",
-            f"gap{self.inactivity_gap_seconds}",
-            f"k{self.tracks_per_session}",
-            f"min{self.min_listen_seconds}",
-        ])  # fmt: skip
+            f"gap{self.session.inactivity_gap_seconds}",
+            f"k{self.session.tracks_per_session}",
+            f"min{self.session.min_listen_seconds}",
+        ]
+        return "_".join(parts)
 
-    @property
-    def sequencing_id(self) -> str:
+    @cached_property
+    def sequence_extraction_id(self) -> str:
         """Cache key for the sequence extraction stage (Algorithm 2 in the thesis)."""
-        return "_".join([
+        parts = [
             "sequences",
-            f"l{self.context_sessions}",
-            f"step{self.step}",
-        ])  # fmt: skip
+            f"l{self.sequence.context_sessions}",
+            f"step{self.sequence.step}",
+        ]
+        return "_".join(parts)
 
-    @property
-    def timesplit_id(self) -> str:
+    @cached_property
+    def temporal_split_id(self) -> str:
         """Cache key for the temporal split (GTS) stage (Algorithm 3 in the thesis)."""
-        val_str = self._format_float_value(self.val_days)
-        test_str = self._format_float_value(self.test_days)
-        gap_str = self._format_float_value(self.gap_minutes)
-        return "_".join([
+        parts = [
             "split",
-            f"val{val_str}d",
-            f"test{test_str}d",
-            f"gap{gap_str}m",
-        ])  # fmt: skip
+            f"val{self._format_value(self.gts.val_days)}d",
+            f"test{self._format_value(self.gts.test_days)}d",
+            f"gap{self._format_value(self.gts.gap_minutes)}m",
+        ]
+        return "_".join(parts)
 
-    @property
-    def run_id(self) -> str:
-        """Deterministic key representing the full pipeline configuration."""
-        return "__".join([
-            self.dataset_id,
-            self.sessionization_id,
-            self.sequencing_id,
-            self.timesplit_id,
-        ])  # fmt: skip
-
-    @property
+    @cached_property
     def config_hash(self) -> str:
-        """SHA-256 hash of the full run_id."""
-        return hashlib.sha256(self.run_id.encode()).hexdigest()
+        """SHA-256 hash representing the entire configuration.
 
-    @property
+        Converts the serialized ImpactConfig (dict) to a JSON string (with sorted keys)
+        before computing the hash to guarantee reproducibility across different runs.
+        """
+        import json
+
+        canonical_json = json.dumps(self.to_dict(), sort_keys=True)
+        return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+    @cached_property
     def display_id(self) -> str:
-        """Short human-readable ID, e.g. '5B-10K-20L-20S-a1b2c3d'.
+        """Short human-readable ID representing the experiment configuration.
 
-        Human-readable ID includes the following components:
-        - Dataset size, uppercased (50M, 500M, 5B),
-        - Tracks per session (K),
-        - Context sessions (L),
-        - Step size (S).
-        - Last 7 characters of the SHA-256 hash of the run_id (e.g. 'a1b2c3d').
+        Format: {size}-A{alpha}-{embedding_dim}D-LR{learning_rate}-{hash[:7]}
+        Example: 5B-A0_5-128D-LR0_001-a1b2c3d
         """
-        return "-".join([
-            self.dataset_size.value.upper(),
-            f"{self.tracks_per_session}K",
-            f"{self.context_sessions}L",
-            f"{self.step}S",
+        parts = [
+            self.dataset.size.value.upper(),
+            f"A{self._format_value(self.eval.alpha, dot_replacement='_')}",
+            f"{self.sasrec.embedding_dim}D",
+            f"A{self._format_value(self.sasrec.learning_rate, dot_replacement='_')}",
             self.config_hash[:7],
-        ])  # fmt: skip
+        ]
+        return "-".join(parts)
 
-    def to_dict(self, nested: bool = False) -> dict[str, Any]:
-        """Serialize the IMPACT Framework configuration to a dictionary.
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the nested configuration into a dictionary.
 
-        Args:
-            nested: If True, parameters are grouped by section (e.g. `dataset`,
-            `sasrec`). If False, all parameters are returned as a flat mapping of
-            field names to values.
+        Automatically converts all Enums to their raw string/numeric values.
         """
-        if nested:
-            return {
-                "dataset": {
-                    "dataset_size": self.dataset_size.value,
-                    "dataset_type": self.dataset_type.value,
-                    "interaction_type": self.interaction_type.value,
-                },
-                "sessions": {
-                    "inactivity_gap_seconds": self.inactivity_gap_seconds,
-                    "tracks_per_session": self.tracks_per_session,
-                    "min_listen_seconds": self.min_listen_seconds,
-                },
-                "sequences": {
-                    "context_sessions": self.context_sessions,
-                    "step": self.step,
-                },
-                "timesplit": {
-                    "test_days": self.test_days,
-                    "val_days": self.val_days,
-                    "gap_minutes": self.gap_minutes,
-                },
-                "actr": {
-                    "decay": self.actr.decay,
-                    "organic_weight": self.actr.organic_weight,
-                    "autoplay_weight": self.actr.autoplay_weight,
-                    "eps": self.actr.eps,
-                },
-                "sasrec": {
-                    "embedding_dim": self.sasrec.embedding_dim,
-                    "num_heads": self.sasrec.num_heads,
-                    "num_layers": self.sasrec.num_layers,
-                    "dropout_rate": self.sasrec.dropout_rate,
-                    "batch_size": self.sasrec.batch_size,
-                    "max_epochs": self.sasrec.max_epochs,
-                    "learning_rate": self.sasrec.learning_rate,
-                    "k_cutoff": self.sasrec.k_cutoff,
-                    "patience": self.sasrec.patience,
-                },
-                "eval": {
-                    "batch_size": self.eval.batch_size,
-                    "k_cutoffs": self.eval.k_cutoffs,
-                    "alpha": self.eval.alpha,
-                },
-                "system": {
-                    "seed": self.seed,
-                    "num_workers": self.num_workers,
-                },
-            }
-        return {
-            "dataset_size": self.dataset_size.value,
-            "dataset_type": self.dataset_type.value,
-            "interaction_type": self.interaction_type.value,
-            "inactivity_gap_seconds": self.inactivity_gap_seconds,
-            "tracks_per_session": self.tracks_per_session,
-            "min_listen_seconds": self.min_listen_seconds,
-            "context_sessions": self.context_sessions,
-            "step": self.step,
-            "test_days": self.test_days,
-            "val_days": self.val_days,
-            "gap_minutes": self.gap_minutes,
-            "actr_decay": self.actr.decay,
-            "actr_organic_weight": self.actr.organic_weight,
-            "actr_autoplay_weight": self.actr.autoplay_weight,
-            "actr_eps": self.actr.eps,
-            "sasrec_embedding_dim": self.sasrec.embedding_dim,
-            "sasrec_num_heads": self.sasrec.num_heads,
-            "sasrec_num_layers": self.sasrec.num_layers,
-            "sasrec_dropout_rate": self.sasrec.dropout_rate,
-            "sasrec_batch_size": self.sasrec.batch_size,
-            "sasrec_max_epochs": self.sasrec.max_epochs,
-            "sasrec_learning_rate": self.sasrec.learning_rate,
-            "sasrec_k_cutoff": self.sasrec.k_cutoff,
-            "sasrec_patience": self.sasrec.patience,
-            "eval_batch_size": self.eval.batch_size,
-            "eval_k_cutoffs": self.eval.k_cutoffs,
-            "eval_alpha": self.eval.alpha,
-            "seed": self.seed,
-            "num_workers": self.num_workers,
-        }
+
+        def enum_dict_factory(data: list[tuple[str, Any]]) -> dict[str, Any]:
+            """Dict factory that extracts .value from Enum objects."""
+            return {k: v.value if isinstance(v, Enum) else v for k, v in data}
+
+        return asdict(self, dict_factory=enum_dict_factory)
 
     def write_yaml(self, output_path: Path) -> None:
         """Write the configuration to a YAML file.
@@ -333,10 +312,10 @@ class ImpactConfig:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("w", encoding="utf-8") as f:
-            yaml.dump(
+            yaml.safe_dump(
                 data=self.to_dict(),
                 stream=f,
-                default_flow_style=False,
+                indent=2,
                 sort_keys=False,  # Prevents from sorting keys alphabetically
                 allow_unicode=True,
             )
