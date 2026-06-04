@@ -59,12 +59,8 @@ class ACTR:
             is masked to -inf. Unseen items receive log(eps) that for small eps is
             approximating -inf under softmax.
         """
-        # Map boolean is_organic flags to float weight values
-        weights = torch.where(
-            is_organic,
-            torch.full_like(time_deltas, self._organic_weight),
-            torch.full_like(time_deltas, self._autoplay_weight),
-        )
+        weight_diff = self._organic_weight - self._autoplay_weight
+        weights = is_organic.to(time_deltas.dtype) * weight_diff + self._autoplay_weight
 
         # Compute individual decay contributions
         contributions = weights * time_deltas.pow(-self._decay)
@@ -76,11 +72,13 @@ class ACTR:
             device=time_deltas.device,
         )
 
-        # Sum up contributions indexed by item_ids (cumulative sum)
+        # Sum up contributions indexed by item_ids (scatter-accumulate keyed by index)
         _ = accumulator.scatter_add_(dim=0, index=item_ids, src=contributions)
+        # This is GPU-vectorizable equivalent of:
+        # for item, value in zip(item_ids, contributions, strict=True):
+        #     accumulator[item] += value
 
-        # Apply logarithm with eps floor to approximate -inf for unseen items
-        # log(0 + 1e-8) is approx. -18.42, which behaves correctly during softmax
+        # Add eps for numerical stability, unseen items receive a small activation score
         bla = torch.log(accumulator + self._eps)
 
         # Ensure the padding token is never recommended
