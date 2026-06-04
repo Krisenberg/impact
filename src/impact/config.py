@@ -155,7 +155,7 @@ class EvalConfig:
 
     The final score is computed as:
 
-        alpha * SASRec + (1 - alpha) * ACT-R
+        alpha * SASRec + (1 - alpha) * ACT-R,
 
     where 1.0 corresponds to SASRec-only recommendations and 0.0 to ACT-R-only
     recommendations.
