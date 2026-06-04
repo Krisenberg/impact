@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, cast
 import polars as pl
 import structlog
 
-from impact.constants import DAY_SECONDS, MINUTE_SECONDS
 from impact.schemas import ItemIndex, ParquetTableSet, TemporalSplit
 from impact.utils import estimate_processing_partitions
 
@@ -21,6 +20,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 logger = structlog.stdlib.get_logger(__name__)
+
+MINUTE_SECONDS: int = 60
+DAY_SECONDS: int = 24 * 60 * 60
 
 
 def split(
