@@ -1,10 +1,10 @@
-from .sequences import sequence
+from .sequence_extraction import extract_sequences
 from .sessionization import sessionize
 from .temporal_split import split
 from .tensorization import tensorize
 
 __all__ = [
-    "sequence",
+    "extract_sequences",
     "sessionize",
     "split",
     "tensorize",
