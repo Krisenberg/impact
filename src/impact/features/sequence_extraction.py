@@ -8,7 +8,7 @@ import structlog
 logger = structlog.stdlib.get_logger(__name__)
 
 
-def sequence(
+def extract_sequences(
     sessions_lf: pl.LazyFrame,
     context_sessions: int = 20,
     step: int = 20,
