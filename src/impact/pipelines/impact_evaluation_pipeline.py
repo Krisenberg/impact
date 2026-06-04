@@ -32,7 +32,7 @@ logger = structlog.stdlib.get_logger(__name__)
 
 
 @final
-class EvaluationPipeline:
+class IMPACTEvaluationPipeline:
     """Late-fusion evaluation of SASRecNBR and ACT-R on held-out test data.
 
     Loads a trained SASRecNBR checkpoint, builds an ACT-R history index for test users,

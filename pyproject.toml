@@ -186,6 +186,8 @@ exclude = [
 # ignore_missing_imports = true  # Ignore missing library stubs or py.typed markers from 3rd-party libraries
 
 [tool.basedpyright]
+venv = ".venv"
+venvPath = "."
 include = [                      # Scan and analyze given files or directories
     "scripts",
     "src",
@@ -212,7 +214,7 @@ executionEnvironments = [
   { root = "src/impact/features/sequences.py", reportExplicitAny = false },
   { root = "src/impact/features/tensorization.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/models/sasrec/dataset.py", reportAny = false },
-  { root = "src/impact/models/sasrec/trainer.py", reportUnknownVariableType = false },
-  { root = "src/impact/pipelines/evaluation_pipeline.py", reportUnusedCallResult = false, reportAny = false },
+  { root = "src/impact/pipelines/impact_evaluation_pipeline.py", reportUnusedCallResult = false, reportAny = false },
+  { root = "src/impact/pipelines/sasrec_training_pipeline.py", reportUnknownVariableType = false },
   { root = "src" },
 ]
