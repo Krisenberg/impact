@@ -9,6 +9,23 @@ from impact.dataset import DatasetSize, DatasetType, InteractionType
 
 
 @dataclass(frozen=True)
+class ACTRConfig:
+    """Configuration for the Intention-Modulated Personalized ACT-R (P-Pop) scorer."""
+
+    decay: float = 0.5
+    """Power-law time decay exponent. Denoted as d in the thesis.
+
+    Higher values result in older listens being forgotten faster.
+    """
+    organic_weight: float = 1.0
+    """Contribution weight for organic (user-initiated) listens."""
+    autoplay_weight: float = 0.5
+    """Contribution weight for autoplay (recsys-initiated) listens."""
+    eps: float = 1e-8
+    """Numerical floor added before log to prevent log(0) for unseen catalog items."""
+
+
+@dataclass(frozen=True)
 class SASRecConfig:
     """Configuration for the SASRecNBR model."""
 
@@ -19,17 +36,40 @@ class SASRecConfig:
     num_layers: int = 2
     """Number of Transformer encoder layers."""
     dropout_rate: float = 0.2
-    """Dropout probability applied after embedding and within each layer."""
+    """Dropout probability applied after embedding within each layer."""
     batch_size: int = 2048
     """Number of sequences per training batch."""
     max_epochs: int = 100
     """Maximum number of training epochs to run."""
     learning_rate: float = 0.001
     """Learning rate for the optimizer."""
-    k: int = 10
+    k_cutoff: int = 10
     """Cutoff for NDCG@K and Recall@K metrics used during model training."""
     patience: int = 10
     """Number of epochs to wait for validation improvement before stopping."""
+
+
+@dataclass(frozen=True)
+class EvalConfig:
+    """Configuration for the late-fusion evaluation of SASRecNBR and ACT-R (IMPACT)."""
+
+    batch_size: int = 512
+    """Number of sequences per evaluation batch.
+
+    Should be lower than `SASRecConfig.batch_size` due to full-catalog scoring.
+    """
+    k_cutoffs: tuple[int, ...] = (5, 10, 40, 100)
+    """Rank cutoffs for computing NDCG@K and Recall@K during evaluation."""
+    alpha: float = 0.5
+    """Relative contribution of SASRec and ACT-R in the final late-fusion score.
+
+    The final score is computed as:
+
+        alpha * SASRec + (1 - alpha) * ACT-R
+
+    where 1.0 corresponds to SASRec-only recommendations and 0.0 to ACT-R-only
+    recommendations.
+    """
 
 
 @dataclass(frozen=True)
@@ -86,14 +126,17 @@ class ImpactConfig:
     The purpose of this parameter is to mimic production system deployment latency.
     """
 
+    # === ACTR ===
+    actr: ACTRConfig = field(default_factory=ACTRConfig)
+    """Configuration for the Intention-Modulated Personalized ACT-R (P-Pop) scorer."""
+
     # === SASRecNBR ===
     sasrec: SASRecConfig = field(default_factory=SASRecConfig)
     """Configuration for the SASRecNBR model."""
 
     # === Evaluation ===
-    eval_ks: tuple[int, ...] = (5, 10, 40, 100)
-    """Tuple of K cut-off values for computing NDCG@K and Recall@K during evaluation."""
-    alpha: float = 0.5
+    eval: EvalConfig = field(default_factory=EvalConfig)
+    """Configuration for the late-fusion evaluation of SASRecNBR and ACT-R (IMPACT)."""
 
     # === System / Hardware ===
     seed: int = 42
@@ -220,7 +263,13 @@ class ImpactConfig:
                     "val_days": self.val_days,
                     "gap_minutes": self.gap_minutes,
                 },
-                "sasrecnbr_model": {
+                "actr": {
+                    "decay": self.actr.decay,
+                    "organic_weight": self.actr.organic_weight,
+                    "autoplay_weight": self.actr.autoplay_weight,
+                    "eps": self.actr.eps,
+                },
+                "sasrec": {
                     "embedding_dim": self.sasrec.embedding_dim,
                     "num_heads": self.sasrec.num_heads,
                     "num_layers": self.sasrec.num_layers,
@@ -228,10 +277,13 @@ class ImpactConfig:
                     "batch_size": self.sasrec.batch_size,
                     "max_epochs": self.sasrec.max_epochs,
                     "learning_rate": self.sasrec.learning_rate,
+                    "k_cutoff": self.sasrec.k_cutoff,
                     "patience": self.sasrec.patience,
                 },
-                "evaluation": {
-                    "eval_ks": self.eval_ks,
+                "eval": {
+                    "batch_size": self.eval.batch_size,
+                    "k_cutoffs": self.eval.k_cutoffs,
+                    "alpha": self.eval.alpha,
                 },
                 "system": {
                     "seed": self.seed,
@@ -250,6 +302,10 @@ class ImpactConfig:
             "test_days": self.test_days,
             "val_days": self.val_days,
             "gap_minutes": self.gap_minutes,
+            "actr_decay": self.actr.decay,
+            "actr_organic_weight": self.actr.organic_weight,
+            "actr_autoplay_weight": self.actr.autoplay_weight,
+            "actr_eps": self.actr.eps,
             "sasrec_embedding_dim": self.sasrec.embedding_dim,
             "sasrec_num_heads": self.sasrec.num_heads,
             "sasrec_num_layers": self.sasrec.num_layers,
@@ -257,8 +313,11 @@ class ImpactConfig:
             "sasrec_batch_size": self.sasrec.batch_size,
             "sasrec_max_epochs": self.sasrec.max_epochs,
             "sasrec_learning_rate": self.sasrec.learning_rate,
+            "sasrec_k_cutoff": self.sasrec.k_cutoff,
             "sasrec_patience": self.sasrec.patience,
-            "eval_ks": self.eval_ks,
+            "eval_batch_size": self.eval.batch_size,
+            "eval_k_cutoffs": self.eval.k_cutoffs,
+            "eval_alpha": self.eval.alpha,
             "seed": self.seed,
             "num_workers": self.num_workers,
         }
