@@ -113,6 +113,7 @@ class SASRecTrainingPipeline:
         )
 
         # Initialize model and optimizer
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = SASRecNBR(
             num_items=num_items,
             context_sessions=self._config.sequence.context_sessions,
@@ -121,13 +122,13 @@ class SASRecTrainingPipeline:
             num_layers=self._config.sasrec.num_layers,
             dropout=self._config.sasrec.dropout_rate,
         )
+        model = model.to(device)
         optimizer = torch.optim.AdamW(
             params=model.parameters(),
             lr=self._config.sasrec.learning_rate,
             weight_decay=1e-4,
         )
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Starting training loop", device=str(device))
         best_ndcg = -1.0
         epochs_without_improvement = 0
