@@ -98,8 +98,9 @@ class SASRecTrainingPipeline:
             shuffle=True,
             collate_fn=get_train_collate_fn(num_items),
             num_workers=self._config.system.num_workers,
-            pin_memory=True,
+            persistent_workers=self._config.system.num_workers > 0,
             worker_init_fn=seed_worker,
+            pin_memory=torch.cuda.is_available(),
             generator=g,
         )
         val_loader = DataLoader[EvalSequenceSample](
@@ -108,8 +109,9 @@ class SASRecTrainingPipeline:
             shuffle=False,
             collate_fn=get_eval_collate_fn(),
             num_workers=self._config.system.num_workers,
-            pin_memory=True,
+            persistent_workers=self._config.system.num_workers > 0,
             worker_init_fn=seed_worker,
+            pin_memory=torch.cuda.is_available(),
         )
 
         # Initialize model and optimizer
