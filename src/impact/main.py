@@ -16,6 +16,7 @@ from impact.cli import inject_impact_config
 from impact.logger import configure_logging
 from impact.pipelines import (
     DataPipeline,
+    IMPACTEvaluationPipeline,
     SASRecTrainingPipeline,
 )
 from impact.utils import seed_everything
@@ -143,7 +144,7 @@ def train_sasrec(
     # Set seed for reproducibility
     seed_everything(impact_config.system.seed)
 
-    pipeline = DataPipeline(
+    data_pipeline = DataPipeline(
         raw_dir=raw_data_dir,
         interim_dir=interim_data_dir,
         processed_dir=processed_data_dir,
@@ -151,10 +152,10 @@ def train_sasrec(
     )
 
     logger.info("Fetching train/val/test splits...")
-    splits, item_index = pipeline.get_splits(n_partitions=n_partitions)
+    splits, item_index = data_pipeline.get_splits(n_partitions=n_partitions)
 
     logger.info("Tensorizing splits...")
-    tensorized_splits = pipeline.tensorize(splits)
+    tensorized_splits = data_pipeline.tensorize(splits)
 
     sasrec_training_pipeline = SASRecTrainingPipeline(config=impact_config)
     sasrec_state_dict_path = models_dir / "sasrecnbr.pt"
@@ -175,6 +176,140 @@ def train_sasrec(
     )
 
     logger.info("SASRecNBR training completed", path=sasrec_state_dict_path.as_posix())
+
+
+@cli.command(name="evaluate-impact")
+@click.option(
+    "--sasrec-checkpoint-path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to a trained SASRecNBR checkpoint that will be evaluated.",
+)
+@click.option(
+    "--log-level",
+    type=click.Choice(list(logging.getLevelNamesMapping()), case_sensitive=False),
+    default="INFO",
+    show_default=True,
+    help="Logging verbosity level.",
+)
+@click.option(
+    "--n-partitions",
+    type=int,
+    default=1,
+    show_default=True,
+    help="""
+        Number of partitions for sequential processing. Use >1 for large datasets that
+        exceed available RAM (data is partitioned by user, i.e. uid column).
+    """,
+)
+@click.option(
+    "--raw-data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="""
+        Root directory for raw data (the original, immutable data dump).
+        Defaults to <project_root>/data/raw.
+    """,
+)
+@click.option(
+    "--interim-data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="""
+        Root directory for interim data (intermediate data that has been transformed).
+        Defaults to <project_root>/data/interim.
+    """,
+)
+@click.option(
+    "--processed-data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=False,
+    help="""
+        Root directory for processed data (the final, canonical datasets for modeling).
+        Defaults to <project_root>/data/processed.
+    """,
+)
+@click.option(
+    "--base-logs-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=False,
+    help="Root directory for log files. Defaults to <project_root>/logs.",
+)
+@inject_impact_config
+def evaluate_impact(
+    impact_config: ImpactConfig,
+    sasrec_checkpoint_path: Path,
+    log_level: str,
+    n_partitions: int,
+    raw_data_dir: Path | None = None,
+    interim_data_dir: Path | None = None,
+    processed_data_dir: Path | None = None,
+    base_logs_dir: Path | None = None,
+    exec_time: datetime.datetime | None = None,
+) -> None:
+    """Run IMPACT late-fusion evaluation on the held-out test split.
+
+    Loads a trained SASRecNBR checkpoint, builds the ACT-R history index for test users,
+    runs batched inference, and computes sample-weighted metrics at all configured
+    cutoff levels: global, repetition-focused, and exploration-focused NDCG@K and
+    Recall@K.
+    """
+    if not sasrec_checkpoint_path.exists():
+        raise FileNotFoundError(
+            f"SASRecNBR checkpoint not found: {sasrec_checkpoint_path.as_posix()}"
+        )
+
+    timestamp = exec_time or datetime.datetime.now(datetime.UTC)
+
+    raw_data_dir = raw_data_dir or PROJECT_ROOT / "data" / "raw"
+    interim_data_dir = interim_data_dir or PROJECT_ROOT / "data" / "interim"
+    processed_data_dir = processed_data_dir or PROJECT_ROOT / "data" / "processed"
+    base_logs_dir = base_logs_dir or PROJECT_ROOT / "logs"
+
+    # Configure logging
+    logs_dir = _get_logs_dir(base_dir=base_logs_dir, timestamp=timestamp)
+    log_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_train-sasrec"
+    configure_logging(
+        level=logging.getLevelNamesMapping()[log_level],
+        log_file=logs_dir / f"{log_filename}.log",
+        json_log_file=logs_dir / f"{log_filename}.json",
+        details=True,
+    )
+
+    logger.info(
+        "IMPACT application initialized",
+        run_timestamp=timestamp.isoformat(),
+        **impact_config.to_dict(),
+    )
+
+    # Load env configuration (e.g. HuggingFace API token)
+    logger.info("Attempting to load env variables from .env file")
+    _ = dotenv.load_dotenv()
+
+    # Set seed for reproducibility
+    seed_everything(impact_config.system.seed)
+
+    data_pipeline = DataPipeline(
+        raw_dir=raw_data_dir,
+        interim_dir=interim_data_dir,
+        processed_dir=processed_data_dir,
+        config=impact_config,
+    )
+
+    logger.info("Fetching raw events...")
+    events_lf = data_pipeline.get_raw_events()
+
+    logger.info("Fetching train/val/test splits...")
+    splits, item_index = data_pipeline.get_splits(n_partitions=n_partitions)
+
+    logger.info("Tensorizing splits...")
+    tensorized_splits = data_pipeline.tensorize(splits)
+
+    evaluation_pipeline = IMPACTEvaluationPipeline(impact_config, item_index, events_lf)
+    logger.info("Running IMPACT evaluation...")
+
+    metrics = evaluation_pipeline.evaluate(tensorized_splits, sasrec_checkpoint_path)
+    logger.info("IMPACT evaluation complete", **metrics)
 
 
 @cli.command(name="grid-search")
