@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
 
 import torch
@@ -108,21 +109,24 @@ def get_train_collate_fn(
     Args:
         num_items: Catalog size; defines the upper bound for negative sampling.
     """
+    return partial(_train_collate_fn, num_items=num_items)
 
-    def _collate(batch: list[TrainSequenceSample]) -> TrainSequenceBatch:
-        contexts = torch.stack([s.context for s in batch])
-        positives = torch.stack([s.target for s in batch])
-        negatives = torch.randint(1, num_items + 1, positives.shape, dtype=torch.long)
 
-        # Possible way to enforce strict negative sampling
-        # mask = torch.isin(negatives, positives)
-        # while mask.any():
-        #     negatives[mask] = torch.randint(1, num_items + 1, negatives[mask].shape)
-        #     mask = torch.isin(negatives, positives)
+def _train_collate_fn(
+    batch: list[TrainSequenceSample],
+    num_items: int,
+) -> TrainSequenceBatch:
+    contexts = torch.stack([s.context for s in batch])
+    positives = torch.stack([s.target for s in batch])
+    negatives = torch.randint(1, num_items + 1, positives.shape, dtype=torch.long)
 
-        return TrainSequenceBatch(contexts, positives, negatives)
+    # Possible way to enforce strict negative sampling
+    # mask = torch.isin(negatives, positives)
+    # while mask.any():
+    #     negatives[mask] = torch.randint(1, num_items + 1, negatives[mask].shape)
+    #     mask = torch.isin(negatives, positives)
 
-    return _collate
+    return TrainSequenceBatch(contexts, positives, negatives)
 
 
 def get_eval_collate_fn() -> Callable[[list[EvalSequenceSample]], EvalSequenceBatch]:
@@ -131,13 +135,13 @@ def get_eval_collate_fn() -> Callable[[list[EvalSequenceSample]], EvalSequenceBa
     Includes uid and target_ts metadata required for ACT-R scoring. Skips negative
     sampling as evaluation scores against the full catalog directly.
     """
+    return _eval_collate_fn
 
-    def _collate(batch: list[EvalSequenceSample]) -> EvalSequenceBatch:
-        return EvalSequenceBatch(
-            uid=torch.tensor([s.uid for s in batch], dtype=torch.long),
-            target_ts=torch.tensor([s.target_ts for s in batch], dtype=torch.long),
-            context=torch.stack([s.context for s in batch]),
-            positive=torch.stack([s.target for s in batch]),
-        )
 
-    return _collate
+def _eval_collate_fn(batch: list[EvalSequenceSample]) -> EvalSequenceBatch:
+    return EvalSequenceBatch(
+        uid=torch.tensor([s.uid for s in batch], dtype=torch.long),
+        target_ts=torch.tensor([s.target_ts for s in batch], dtype=torch.long),
+        context=torch.stack([s.context for s in batch]),
+        positive=torch.stack([s.target for s in batch]),
+    )
