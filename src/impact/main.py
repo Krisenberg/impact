@@ -13,6 +13,7 @@ import dotenv
 import structlog
 
 from impact.cli import inject_impact_config
+from impact.dataset import DatasetSize
 from impact.logger import configure_logging
 from impact.pipelines import (
     DataPipeline,
@@ -60,7 +61,7 @@ def cli() -> None:
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
     help="""
-        Root directory for raw data (the original, immutable data dump).
+        Base directory for raw data (the original, immutable data dump).
         Defaults to <project_root>/data/raw.
     """,
 )
@@ -69,7 +70,7 @@ def cli() -> None:
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
     help="""
-        Root directory for interim data (intermediate data that has been transformed).
+        Base directory for interim data (intermediate data that has been transformed).
         Defaults to <project_root>/data/interim.
     """,
 )
@@ -78,7 +79,7 @@ def cli() -> None:
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
     help="""
-        Root directory for processed data (the final, canonical datasets for modeling).
+        Base directory for processed data (the final, canonical datasets for modeling).
         Defaults to <project_root>/data/processed.
     """,
 )
@@ -86,15 +87,15 @@ def cli() -> None:
     "--base-logs-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
-    help="Root directory for log files. Defaults to <project_root>/logs.",
+    help="Base directory for log files. Defaults to <project_root>/logs.",
 )
 @click.option(
     "--models-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
     help="""
-        Root directory for trained and serialized SASRecNBR checkpoints.
-        Defaults to <project_root>/models.
+        Base directory where a serialized checkpoint of the trained SASRecNBR model
+        will be saved. Defaults to <project_root>/models.
     """,
 )
 @inject_impact_config
@@ -117,8 +118,10 @@ def train_sasrec(
     processed_data_dir = processed_data_dir or PROJECT_ROOT / "data" / "processed"
     base_logs_dir = base_logs_dir or PROJECT_ROOT / "logs"
     models_dir = (
-        models_dir or PROJECT_ROOT / "models"
-    ) / f"train-sasrec__{impact_config.display_id}"
+        (models_dir or PROJECT_ROOT / "models")
+        / "train-sasrec"
+        / impact_config.display_id
+    )
     models_dir.mkdir(exist_ok=True, parents=True)
 
     # Configure logging
@@ -207,7 +210,7 @@ def train_sasrec(
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
     help="""
-        Root directory for raw data (the original, immutable data dump).
+        Base directory for raw data (the original, immutable data dump).
         Defaults to <project_root>/data/raw.
     """,
 )
@@ -216,7 +219,7 @@ def train_sasrec(
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
     help="""
-        Root directory for interim data (intermediate data that has been transformed).
+        Base directory for interim data (intermediate data that has been transformed).
         Defaults to <project_root>/data/interim.
     """,
 )
@@ -225,7 +228,7 @@ def train_sasrec(
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
     help="""
-        Root directory for processed data (the final, canonical datasets for modeling).
+        Base directory for processed data (the final, canonical datasets for modeling).
         Defaults to <project_root>/data/processed.
     """,
 )
@@ -233,7 +236,7 @@ def train_sasrec(
     "--base-logs-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
-    help="Root directory for log files. Defaults to <project_root>/logs.",
+    help="Base directory for log files. Defaults to <project_root>/logs.",
 )
 @inject_impact_config
 def evaluate_impact(
@@ -312,7 +315,7 @@ def evaluate_impact(
     logger.info("IMPACT evaluation complete", **metrics)
 
 
-@cli.command(name="grid-search")
+@cli.command(name="sasrec-grid-search")
 @click.option(
     "--log-level",
     type=click.Choice(list(logging.getLevelNamesMapping()), case_sensitive=False),
@@ -335,7 +338,7 @@ def evaluate_impact(
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
     help="""
-        Root directory for raw data (the original, immutable data dump).
+        Base directory for raw data (the original, immutable data dump).
         Defaults to <project_root>/data/raw.
     """,
 )
@@ -344,7 +347,7 @@ def evaluate_impact(
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
     help="""
-        Root directory for interim data (intermediate data that has been transformed).
+        Base directory for interim data (intermediate data that has been transformed).
         Defaults to <project_root>/data/interim.
     """,
 )
@@ -353,7 +356,7 @@ def evaluate_impact(
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
     help="""
-        Root directory for processed data (the final, canonical datasets for modeling).
+        Base directory for processed data (the final, canonical datasets for modeling).
         Defaults to <project_root>/data/processed.
     """,
 )
@@ -361,15 +364,16 @@ def evaluate_impact(
     "--base-logs-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
-    help="Root directory for log files. Defaults to <project_root>/logs.",
+    help="Base directory for log files. Defaults to <project_root>/logs.",
 )
 @click.option(
     "--models-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
     help="""
-        Root directory for trained and serialized models and grid search results.
-        Defaults to <project_root>/models.
+        Base directory where the grid search artifacts will be saved:
+        the best-performing SASRecNBR model checkpoint, optimal ImpactConfig snapshot,
+        and full tuning results in JSON format. Defaults to <project_root>/models.
     """,
 )
 @inject_impact_config
@@ -384,20 +388,24 @@ def grid_search(
     models_dir: Path | None = None,
     exec_time: datetime.datetime | None = None,
 ) -> None:
-    """Run a grid search on Yambda-50M to find optimal SASRecNBR hyperparameters."""
+    """Run grid search to find optimal SASRecNBR hyperparameters."""
     timestamp = exec_time or datetime.datetime.now(datetime.UTC)
 
     raw_data_dir = raw_data_dir or PROJECT_ROOT / "data" / "raw"
     interim_data_dir = interim_data_dir or PROJECT_ROOT / "data" / "interim"
     processed_data_dir = processed_data_dir or PROJECT_ROOT / "data" / "processed"
     base_logs_dir = base_logs_dir or PROJECT_ROOT / "logs"
-    models_dir = models_dir or PROJECT_ROOT / "models"
-    out_dir = models_dir / f"grid_search_{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}"
+
+    out_dir = (
+        (models_dir or PROJECT_ROOT / "models")
+        / "sasrec-grid-search"
+        / timestamp.strftime("%Y-%m-%d_%H-%M-%S")
+    )
     out_dir.mkdir(exist_ok=True, parents=True)
 
     # Configure logging
     logs_dir = _get_logs_dir(base_dir=base_logs_dir, timestamp=timestamp)
-    log_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_impact"
+    log_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_sasrec-grid-search"
     configure_logging(
         level=logging.getLevelNamesMapping()[log_level],
         log_file=logs_dir / f"{log_filename}.log",
@@ -405,7 +413,11 @@ def grid_search(
         details=True,
     )
 
-    logger.info("IMPACT application initialized", run_timestamp=timestamp.isoformat())
+    logger.info(
+        "IMPACT application initialized",
+        run_timestamp=timestamp.isoformat(),
+        **impact_config.to_dict(),
+    )
 
     # Load env configuration (e.g. HuggingFace API token)
     logger.info("Attempting to load env variables from .env file")
@@ -414,21 +426,18 @@ def grid_search(
     # Set seed for reproducibility
     seed_everything(impact_config.system.seed)
 
-    pipeline = DataPipeline(
+    data_pipeline = DataPipeline(
         raw_dir=raw_data_dir,
         interim_dir=interim_data_dir,
         processed_dir=processed_data_dir,
         config=impact_config,
     )
-    splits, item_index = pipeline.get_splits(n_partitions=n_partitions)
-    tensors = pipeline.tensorize(splits)
 
-    logger.info(
-        "Dataset preprocessing and tensorization completed",
-        train_size=tensors.train.meta[0],
-        val_size=tensors.val.meta[0],
-        test_size=tensors.test.meta[0],
-    )
+    logger.info("Fetching train/val/test splits...")
+    splits, item_index = data_pipeline.get_splits(n_partitions=n_partitions)
+
+    logger.info("Tensorizing splits...")
+    tensorized_splits = data_pipeline.tensorize(splits)
 
     best_ndcg = 0.0
     best_config: ImpactConfig | None = None
@@ -438,6 +447,12 @@ def grid_search(
     current_model_path: Path = out_dir / "current_model.pt"
 
     logger.info("Starting hyperparameter tuning (Grid Search)...")
+    if impact_config.dataset.size != DatasetSize.SIZE_50M:
+        msg = (
+            "Grid search on variant larger than Yambda-50M (Yambda-"
+            f"{impact_config.dataset.size.value.upper()}). This might take a long time"
+        )
+        logger.warning(msg)
 
     param_grid: dict[str, list[Any]] = {
         # "learning_rate": [0.0002, 0.0005, 0.001, 0.002],
@@ -450,26 +465,15 @@ def grid_search(
 
     try:
         for i, params in enumerate(param_combinations, start=1):
-            _ = structlog.contextvars.bind_contextvars(
-                config_id=i,
-                learning_rate=params["learning_rate"],
-                embedding_dim=params["embedding_dim"],
-                dropout_rate=params["dropout_rate"],
-                num_layers=params["num_layers"],
-            )
+            _ = structlog.contextvars.bind_contextvars(config_id=i, **params)
             logger.info(f"Testing configuration {i}/{len(param_combinations)}")
 
-            sasrec_config = dataclasses.replace(
-                impact_config.sasrec,
-                learning_rate=params["learning_rate"],
-                embedding_dim=params["embedding_dim"],
-                dropout_rate=params["dropout_rate"],
-                num_layers=params["num_layers"],
-            )
+            sasrec_config = dataclasses.replace(impact_config.sasrec, **params)
             run_config = dataclasses.replace(impact_config, sasrec=sasrec_config)
+
             sasrec_training_pipeline = SASRecTrainingPipeline(config=run_config)
             val_ndcg = sasrec_training_pipeline.train(
-                split=tensors,
+                split=tensorized_splits,
                 num_items=item_index.num_items,
                 save_path=current_model_path,
             )
@@ -492,9 +496,7 @@ def grid_search(
             # Remove the current model checkpoint (if it exists)
             current_model_path.unlink(missing_ok=True)
     finally:
-        structlog.contextvars.unbind_contextvars(
-            "config_id", "learning_rate", "embedding_dim", "dropout_rate", "num_layers"
-        )
+        structlog.contextvars.unbind_contextvars("config_id", *param_grid.keys())
 
     if best_config is None:
         raise RuntimeError("No model found with NDCG > 0")
@@ -503,7 +505,7 @@ def grid_search(
     with results_path.open("w") as f:
         json.dump(tuning_results, f, indent=4)
 
-    best_config_path = out_dir / "sasrec_best_config.yaml"
+    best_config_path = out_dir / "best_impact_config.yaml"
     best_config.write_yaml(best_config_path)
 
     logger.info(
