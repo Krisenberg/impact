@@ -1,5 +1,3 @@
-"""Main entrypoint for the IMPACT application and pipelines execution."""
-
 from __future__ import annotations
 
 import dataclasses
@@ -12,12 +10,14 @@ from typing import TYPE_CHECKING, Any
 
 import click
 import dotenv
-import polars as pl
 import structlog
 
 from impact.cli import inject_impact_config
 from impact.logger import configure_logging
-from impact.pipelines import DataPipeline, EvaluationPipeline, SASRecTrainingPipeline
+from impact.pipelines import (
+    DataPipeline,
+    SASRecTrainingPipeline,
+)
 from impact.utils import seed_everything
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ def cli() -> None:
     pass
 
 
-@cli.command(name="main-pipeline")
+@cli.command(name="train-sasrec")
 @click.option(
     "--log-level",
     type=click.Choice(list(logging.getLevelNamesMapping()), case_sensitive=False),
@@ -92,12 +92,12 @@ def cli() -> None:
     type=click.Path(file_okay=False, path_type=Path),
     required=False,
     help="""
-        Root directory for trained and serialized models, model predictions, or model
-        summaries. Defaults to <project_root>/models.
+        Root directory for trained and serialized SASRecNBR checkpoints.
+        Defaults to <project_root>/models.
     """,
 )
 @inject_impact_config
-def main_pipeline(
+def train_sasrec(
     impact_config: ImpactConfig,
     log_level: str,
     n_partitions: int,
@@ -108,18 +108,21 @@ def main_pipeline(
     models_dir: Path | None = None,
     exec_time: datetime.datetime | None = None,
 ) -> None:
-    """IMPACT main pipeline execution entrypoint."""
+    """Run SASRecNBR training pipeline."""
     timestamp = exec_time or datetime.datetime.now(datetime.UTC)
 
     raw_data_dir = raw_data_dir or PROJECT_ROOT / "data" / "raw"
     interim_data_dir = interim_data_dir or PROJECT_ROOT / "data" / "interim"
     processed_data_dir = processed_data_dir or PROJECT_ROOT / "data" / "processed"
     base_logs_dir = base_logs_dir or PROJECT_ROOT / "logs"
-    models_dir = models_dir or PROJECT_ROOT / "models"
+    models_dir = (
+        models_dir or PROJECT_ROOT / "models"
+    ) / f"train-sasrec__{impact_config.display_id}"
+    models_dir.mkdir(exist_ok=True, parents=True)
 
     # Configure logging
     logs_dir = _get_logs_dir(base_dir=base_logs_dir, timestamp=timestamp)
-    log_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_impact"
+    log_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_train-sasrec"
     configure_logging(
         level=logging.getLevelNamesMapping()[log_level],
         log_file=logs_dir / f"{log_filename}.log",
@@ -127,14 +130,18 @@ def main_pipeline(
         details=True,
     )
 
-    logger.info("IMPACT application initialized", run_timestamp=timestamp.isoformat())
+    logger.info(
+        "IMPACT application initialized",
+        run_timestamp=timestamp.isoformat(),
+        **impact_config.to_dict(),
+    )
 
     # Load env configuration (e.g. HuggingFace API token)
     logger.info("Attempting to load env variables from .env file")
     _ = dotenv.load_dotenv()
 
     # Set seed for reproducibility
-    seed_everything(impact_config.seed)
+    seed_everything(impact_config.system.seed)
 
     pipeline = DataPipeline(
         raw_dir=raw_data_dir,
@@ -142,44 +149,32 @@ def main_pipeline(
         processed_dir=processed_data_dir,
         config=impact_config,
     )
-    ds_size = impact_config.dataset_size
 
-    events_lf = pipeline.get_raw_events()
-    print(f"{ds_size} events_lf: {events_lf.select(pl.len()).collect().item()}")
-
-    sessions_lf = pipeline.get_sessions(n_partitions=n_partitions)
-    print(f"{ds_size} sessions_lf: {sessions_lf.select(pl.len()).collect().item()}")
-
-    sequences_lf = pipeline.get_sequences(n_partitions=n_partitions)
-    print(f"{ds_size} sequences_lf: {sequences_lf.select(pl.len()).collect().item()}")
-
+    logger.info("Fetching train/val/test splits...")
     splits, item_index = pipeline.get_splits(n_partitions=n_partitions)
-    print(f"{ds_size} train: {splits.train.lf.select(pl.len()).collect().item()}")
-    print(f"{ds_size} val: {splits.val.lf.select(pl.len()).collect().item()}")
-    print(f"{ds_size} test: {splits.test.lf.select(pl.len()).collect().item()}")
-    print(f"{ds_size} item-idx: {item_index.num_items}")
 
-    tensors = pipeline.tensorize(splits)
-    n, l, k = tensors.train.meta  # noqa: E741
-    print(f"{ds_size} train tensors: N={n}, L={l}, K={k}")
-    print(f"{ds_size} val tensors:   N={tensors.val.meta[0]}")
-    print(f"{ds_size} test tensors:  N={tensors.test.meta[0]}")
+    logger.info("Tensorizing splits...")
+    tensorized_splits = pipeline.tensorize(splits)
 
     sasrec_training_pipeline = SASRecTrainingPipeline(config=impact_config)
-    state_dict_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_best_model.pt"
-    sasrec_state_dict_path = models_dir / state_dict_filename
+    sasrec_state_dict_path = models_dir / "sasrecnbr.pt"
+
+    if sasrec_state_dict_path.exists():
+        msg = (
+            "SASRecNBR checkpoint already exists, skipping training. Please note that "
+            "results may differ across machines even with identical config."
+        )
+        logger.warning(msg, path=sasrec_state_dict_path.as_posix())
+        return
+
+    logger.info("Training SASRecNBR...")
     _ = sasrec_training_pipeline.train(
-        split=tensors,
+        split=tensorized_splits,
         num_items=item_index.num_items,
         save_path=sasrec_state_dict_path,
     )
 
-    evaluation_pipeline = EvaluationPipeline(impact_config, item_index, events_lf)
-    metrics = evaluation_pipeline.evaluate(tensors, sasrec_state_dict_path)
-
-    logger.info("Evaluation pipeline completed", **metrics)
-    logger.info("IMPACT Framework configuration", **impact_config.to_dict())
-    logger.info("IMPACT application completed")
+    logger.info("SASRecNBR training completed", path=sasrec_state_dict_path.as_posix())
 
 
 @cli.command(name="grid-search")
@@ -282,7 +277,7 @@ def grid_search(
     _ = dotenv.load_dotenv()
 
     # Set seed for reproducibility
-    seed_everything(impact_config.seed)
+    seed_everything(impact_config.system.seed)
 
     pipeline = DataPipeline(
         raw_dir=raw_data_dir,
