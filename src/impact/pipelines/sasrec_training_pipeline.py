@@ -35,7 +35,7 @@ logger = structlog.stdlib.get_logger(__name__)
 
 @final
 class SASRecTrainingPipeline:
-    """Orchestrates SASRecNBR initialisation, data loading, and training."""
+    """Orchestrates SASRecNBR initialization, data loading, and training."""
 
     def __init__(self, config: ImpactConfig) -> None:
         """Initialize the SASRecNBR training pipeline.
@@ -51,10 +51,10 @@ class SASRecTrainingPipeline:
         num_items: int,
         save_path: Path | None = None,
     ) -> float:
-        """Initialise and train SASRecNBR with early stopping monitored via val NDCG@K.
+        """Initialise and train SASRecNBR with early stopping monitored via NDCG@K.
 
-        Training stops either when `config.max_epochs` is reached or after
-        `config.patience` consecutive epochs without improvement.
+        Training stops either when `ImpactConfig.sasrec.max_epochs` is reached or after
+        `ImpactConfig.sasrec.patience` consecutive epochs without improvement.
 
         Args:
             split: Tensorized train/val/test temporal splits; train is used for
@@ -64,7 +64,8 @@ class SASRecTrainingPipeline:
                 checkpoint is saved.
 
         Returns:
-            Best validation NDCG@K reached before training terminated.
+            Best NDCG@K (calculated on the validation set) reached before training
+            terminated.
         """
         if save_path is not None:
             if save_path.exists():
@@ -88,7 +89,7 @@ class SASRecTrainingPipeline:
 
         # Setup deterministic random state
         g = torch.Generator()
-        _ = g.manual_seed(self._config.seed)
+        _ = g.manual_seed(self._config.system.seed)
 
         # Configure DataLoaders with multi-processing seed protection
         train_loader = DataLoader[TrainSequenceSample](
@@ -96,7 +97,7 @@ class SASRecTrainingPipeline:
             batch_size=self._config.sasrec.batch_size,
             shuffle=True,
             collate_fn=get_train_collate_fn(num_items),
-            num_workers=self._config.num_workers,
+            num_workers=self._config.system.num_workers,
             pin_memory=True,
             worker_init_fn=seed_worker,
             generator=g,
@@ -106,28 +107,27 @@ class SASRecTrainingPipeline:
             batch_size=self._config.sasrec.batch_size,
             shuffle=False,
             collate_fn=get_eval_collate_fn(),
-            num_workers=self._config.num_workers,
+            num_workers=self._config.system.num_workers,
             pin_memory=True,
             worker_init_fn=seed_worker,
         )
 
-        # Device and Model allocation
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Initialize model and optimizer
         model = SASRecNBR(
             num_items=num_items,
-            context_sessions=self._config.context_sessions,
+            context_sessions=self._config.sequence.context_sessions,
             embedding_dim=self._config.sasrec.embedding_dim,
             num_heads=self._config.sasrec.num_heads,
             num_layers=self._config.sasrec.num_layers,
             dropout=self._config.sasrec.dropout_rate,
         )
-
         optimizer = torch.optim.AdamW(
             params=model.parameters(),
             lr=self._config.sasrec.learning_rate,
             weight_decay=1e-4,
         )
 
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Starting training loop", device=str(device))
         best_ndcg = -1.0
         epochs_without_improvement = 0
@@ -165,9 +165,7 @@ class SASRecTrainingPipeline:
 
             if epochs_without_improvement >= self._config.sasrec.patience:
                 logger.info(
-                    "Early stopping triggered",
-                    epoch=epoch,
-                    best_ndcg=best_ndcg,
+                    "Early stopping triggered", epoch=epoch, best_ndcg=best_ndcg
                 )
                 break
 
@@ -193,12 +191,8 @@ class SASRecTrainingPipeline:
         _ = model.train()
         total_loss = 0.0
 
-        progress = tqdm(
-            iterable=cast(Iterator[TrainSequenceBatch], iter(loader)),
-            desc=f"Epoch {epoch}",
-            leave=False,
-        )
-        for batch in progress:
+        iterator = cast(Iterator[TrainSequenceBatch], iter(loader))
+        for batch in tqdm(iterator, desc=f"Epoch {epoch}", leave=False):
             batch = batch.to(device)
 
             # Reset gradients
@@ -230,7 +224,7 @@ class SASRecTrainingPipeline:
         loader: DataLoader[EvalSequenceBatch],
         device: torch.device,
     ) -> tuple[float, float]:
-        """Score the model over loader against the full catalog.
+        """Score the model over given loader against the full catalog.
 
         Returns:
             (NDCG@K, Recall@K) as sample-weighted averages over all batches.
@@ -238,6 +232,8 @@ class SASRecTrainingPipeline:
         _ = model.eval()
         ndcg_sum, recall_sum = 0.0, 0.0
         total_samples = 0
+
+        k_cutoff = self._config.sasrec.val_k_cutoff
 
         for batch in cast(Iterator[EvalSequenceBatch], iter(loader)):
             batch = batch.to(device)
@@ -249,8 +245,8 @@ class SASRecTrainingPipeline:
             logits = model.score_all_items(hidden_state)
 
             # Compute NDCG@K and Recall@K
-            batch_ndcg = compute_ndcg_at_k(logits, target, k=self._config.sasrec.k)
-            batch_recall = compute_recall_at_k(logits, target, k=self._config.sasrec.k)
+            batch_ndcg = compute_ndcg_at_k(logits, target, k=k_cutoff)
+            batch_recall = compute_recall_at_k(logits, target, k=k_cutoff)
 
             # Weight by batch size
             ndcg_sum += batch_ndcg * batch_len
