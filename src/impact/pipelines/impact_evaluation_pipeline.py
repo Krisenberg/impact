@@ -173,18 +173,17 @@ class IMPACTEvaluationPipeline:
 
         logger.info("Computing final (aggregated) metrics...")
         metric_prefixes = ("ndcg", "recall")
-        splits = {
+        denominator_by_suffix = {
             "": max(total_samples, 1),  # max(..., 1) to avoid division by zero
             "_rep": max(total_rep_samples, 1),
             "_exp": max(total_exp_samples, 1),
         }
-
         metrics: dict[str, float] = {}
         for k in self._config.eval.k_cutoffs:
             for prefix in metric_prefixes:
-                for suffix, denom in splits.items():
+                for suffix, denominator in denominator_by_suffix.items():
                     key = f"{prefix}{suffix}_at_{k}"
-                    metrics[key] = batch_metric_sums[key] / denom
+                    metrics[key] = batch_metric_sums[key] / denominator
 
         logger.info("Evaluation complete")
         return metrics
@@ -257,7 +256,7 @@ class IMPACTEvaluationPipeline:
 
         Derives repetition and exploration target subsets internally from targets
         and context. Returns unnormalized sums (value * count); division by total
-        counts happens in evaluate().
+        counts should happen in evaluate().
 
         Returns:
             Tuple of (metric_sums, num_rep, num_exp) where metric_sums contains
@@ -270,10 +269,9 @@ class IMPACTEvaluationPipeline:
         context_valid = context_flat.masked_fill(context_flat == 0, -1)
 
         # [B, K, 1] == [B, 1, L*K] --broadcast--> [B, K, L*K] -> [B, K]
-        is_repeated = (targets.unsqueeze(2) == context_valid.unsqueeze(1)).any(
-            dim=-1
-        ) & (targets != 0)
-        is_explored = (~is_repeated) & (targets != 0)  # [B, K]
+        _is_repeated = (targets.unsqueeze(2) == context_valid.unsqueeze(1)).any(dim=-1)
+        is_repeated = _is_repeated & (targets != 0)  # [B, K]
+        is_explored = (~_is_repeated) & (targets != 0)  # [B, K]
 
         targets_rep = targets.masked_fill(~is_repeated, 0)
         targets_exp = targets.masked_fill(~is_explored, 0)
