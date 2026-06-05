@@ -1,5 +1,3 @@
-"""Orchestrator for the IMPACT data processing pipeline."""
-
 import shutil
 from pathlib import Path
 
@@ -55,10 +53,10 @@ class DataPipeline:
 
         fetcher = YambdaFetcher(
             cache_dir=self.raw_dir,
-            dataset_type=self.config.dataset_type,
-            dataset_size=self.config.dataset_size,
+            dataset_type=self.config.dataset.format,
+            dataset_size=self.config.dataset.size,
         )
-        return fetcher.get_interactions(event_type=self.config.interaction_type)
+        return fetcher.get_interactions(event_type=self.config.dataset.interaction_type)
 
     def get_sessions(self, n_partitions: int = 1) -> pl.LazyFrame:
         """Get sessionized data, computing it if not cached.
@@ -97,9 +95,9 @@ class DataPipeline:
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
                 sessionize(
                     events_lf=events_lf.filter(pl.col("uid") % n_partitions == i),
-                    inactivity_gap_seconds=self.config.inactivity_gap_seconds,
-                    tracks_per_session=self.config.tracks_per_session,
-                    min_listen_seconds=self.config.min_listen_seconds,
+                    inactivity_gap_seconds=self.config.session.inactivity_gap_seconds,
+                    tracks_per_session=self.config.session.tracks_per_session,
+                    min_listen_seconds=self.config.session.min_listen_seconds,
                 ).sink_parquet(sessions_dir / f"sessions_part_{i}.parquet")
 
             # Mark as completed
@@ -118,13 +116,13 @@ class DataPipeline:
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
 
-        from impact.features import sequence
+        from impact.features import extract_sequences
 
         sequences_dir = (
             self.interim_dir
             / self.config.dataset_id
             / self.config.sessionization_id
-            / self.config.sequencing_id
+            / self.config.sequence_extraction_id
         )
         success_marker = sequences_dir / "_SUCCESS"
 
@@ -146,10 +144,10 @@ class DataPipeline:
             for i in range(n_partitions):
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
 
-                sequence(
+                extract_sequences(
                     sessions_lf=sessions_lf.filter(pl.col("uid") % n_partitions == i),
-                    context_sessions=self.config.context_sessions,
-                    step=self.config.step,
+                    context_sessions=self.config.sequence.context_sessions,
+                    step=self.config.sequence.step,
                     assign_index=False,  # Assign global index after merging
                 ).sink_parquet(sequences_dir / f"sequences_part_{i}.parquet")
 
@@ -173,7 +171,7 @@ class DataPipeline:
                 large datasets that exceed available RAM (data is partitioned by user,
                 i.e. uid column).
             compute_ram_fraction: Fraction of available RAM allowed per processing
-                partition. It should be keept low (<=0.15) to account for memory spikes
+                partition. It should be kept low (<=0.15) to account for memory spikes
                 during joins, explodes, and struct (non-streamable) Polars operations.
         """
         if n_partitions < 1:
@@ -185,8 +183,8 @@ class DataPipeline:
             self.processed_dir
             / self.config.dataset_id
             / self.config.sessionization_id
-            / self.config.sequencing_id
-            / self.config.timesplit_id
+            / self.config.sequence_extraction_id
+            / self.config.temporal_split_id
         )
         item_to_idx_cache_dir = splits_dir / "item_to_idx"
         train_cache_dir = splits_dir / "train"
@@ -217,9 +215,9 @@ class DataPipeline:
                 val_dir=val_cache_dir,
                 test_dir=test_cache_dir,
                 item_to_idx_dir=item_to_idx_cache_dir,
-                test_days=self.config.test_days,
-                val_days=self.config.val_days,
-                gap_minutes=self.config.gap_minutes,
+                test_days=self.config.gts.test_days,
+                val_days=self.config.gts.val_days,
+                gap_minutes=self.config.gts.gap_minutes,
                 compute_ram_fraction=compute_ram_fraction,
             )
 
@@ -247,7 +245,7 @@ class DataPipeline:
             split: Temporal dataset splits, as returned by `get_splits()`.
 
         Returns:
-            MemmapSplit with memory-mapped train, val, and test arrays.
+            TensorizedSplit with memory-mapped train, val, and test arrays.
         """
         from impact.features import tensorize
 
@@ -255,8 +253,8 @@ class DataPipeline:
             self.processed_dir
             / self.config.dataset_id
             / self.config.sessionization_id
-            / self.config.sequencing_id
-            / self.config.timesplit_id
+            / self.config.sequence_extraction_id
+            / self.config.temporal_split_id
             / "tensors"
         )
         success_marker = tensors_dir / "_SUCCESS"
@@ -283,8 +281,8 @@ class DataPipeline:
                 _ = tensorize(
                     dataset=dataset,
                     out_dir=tensors_dir / name,
-                    tracks_per_session=self.config.tracks_per_session,
-                    context_sessions=self.config.context_sessions,
+                    tracks_per_session=self.config.session.tracks_per_session,
+                    context_sessions=self.config.sequence.context_sessions,
                 )
 
             # Mark as completed
