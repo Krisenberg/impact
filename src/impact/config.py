@@ -120,8 +120,15 @@ class SASRecConfig:
     dropout_rate: float = 0.2
     """Dropout probability applied after embedding within each layer."""
 
-    batch_size: int = 2048
+    train_batch_size: int = 2048
     """Number of sequences per training batch."""
+
+    eval_batch_size: int = 2048
+    """Number of sequences per evaluation batch.
+
+    For larger dataset variants, should be lower than training batch size due to
+    full-catalog scoring memory requirements.
+    """
 
     max_epochs: int = 100
     """Maximum number of training epochs to run."""

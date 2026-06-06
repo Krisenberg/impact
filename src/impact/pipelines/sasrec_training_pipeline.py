@@ -74,7 +74,8 @@ class SASRecTrainingPipeline:
 
         logger.info(
             "Initializing SASRecNBR training run",
-            batch_size=self._config.sasrec.batch_size,
+            train_batch_size=self._config.sasrec.train_batch_size,
+            eval_batch_size=self._config.sasrec.eval_batch_size,
             max_epochs=self._config.sasrec.max_epochs,
             learning_rate=self._config.sasrec.learning_rate,
             patience=self._config.sasrec.patience,
@@ -94,7 +95,7 @@ class SASRecTrainingPipeline:
         # Configure DataLoaders with multi-processing seed protection
         train_loader = DataLoader[TrainSequenceSample](
             dataset=TrainSequenceDataset(split.train),
-            batch_size=self._config.sasrec.batch_size,
+            batch_size=self._config.sasrec.train_batch_size,
             shuffle=True,
             collate_fn=get_train_collate_fn(num_items),
             num_workers=self._config.system.num_workers,
@@ -105,7 +106,7 @@ class SASRecTrainingPipeline:
         )
         val_loader = DataLoader[EvalSequenceSample](
             dataset=EvalSequenceDataset(split.val),
-            batch_size=self._config.sasrec.batch_size,
+            batch_size=self._config.sasrec.eval_batch_size,
             shuffle=False,
             collate_fn=get_eval_collate_fn(),
             num_workers=self._config.system.num_workers,

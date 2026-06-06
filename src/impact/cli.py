@@ -193,11 +193,23 @@ def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
             help="Dropout probability applied after embedding within each layer.",
         ),
         click.option(
-            "--sasrec-batch-size",
+            "--sasrec-train-batch-size",
             type=int,
             default=2048,
             show_default=True,
             help="Number of sequences per training batch.",
+        ),
+        click.option(
+            "--sasrec-eval-batch-size",
+            type=int,
+            default=2048,
+            show_default=True,
+            help="""
+                Number of sequences per evaluation batch.
+
+                For larger dataset variants, should be lower than training batch size
+                due to full-catalog scoring memory requirements.
+            """,
         ),
         click.option(
             "--sasrec-max-epochs",
