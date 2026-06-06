@@ -78,12 +78,14 @@ class IMPACTEvaluationPipeline:
             sasrec_state_dict_path: Path to the saved SASRecNBR checkpoint.
 
         Returns:
-            Dictionary of ndcg_at_{k}, recall_at_{k}, ndcg_rep_at_{k},
-            recall_rep_at_{k}, ndcg_exp_at_{k}, recall_exp_at_{k} for each k cutoff.
+            Dictionary of ndcg_at_{k}, recall_at_{k}, and all local/global
+            repetition- and exploration-focused variants for each configured k cutoff.
         """
         logger.info("Starting evaluation pipeline")
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        alpha = self._config.eval.alpha
+
         sasrec = self._load_sasrec(sasrec_state_dict_path, device)
 
         actr_history_index = ACTRHistoryIndex(
@@ -102,21 +104,25 @@ class IMPACTEvaluationPipeline:
         metric_prefixes = (
             "ndcg",
             "recall",
-            "ndcg_rep",
-            "recall_rep",
-            "ndcg_exp",
-            "recall_exp",
+            "ndcg_loc_rep",
+            "recall_loc_rep",
+            "ndcg_loc_exp",
+            "recall_loc_exp",
+            "ndcg_glb_rep",
+            "recall_glb_rep",
+            "ndcg_glb_exp",
+            "recall_glb_exp",
         )
+
         metric_names: list[str] = [
             f"{prefix}_at_{k}"
             for k in self._config.eval.k_cutoffs
             for prefix in metric_prefixes
         ]
-
-        total_samples = 0
-        total_rep_samples = 0
-        total_exp_samples = 0
         batch_metric_sums: dict[str, float] = dict.fromkeys(metric_names, 0.0)
+        total_counts: dict[str, int] = dict.fromkeys(
+            ("global", "loc_rep", "loc_exp", "glb_rep", "glb_exp"), 0
+        )
 
         test_loader = DataLoader[EvalSequenceSample](
             dataset=EvalSequenceDataset(split.test),
@@ -124,26 +130,32 @@ class IMPACTEvaluationPipeline:
             shuffle=False,
             collate_fn=get_eval_collate_fn(),  # No negative sampling
             num_workers=self._config.system.num_workers,
-            pin_memory=True,
+            persistent_workers=self._config.system.num_workers > 0,
             worker_init_fn=seed_worker,
+            pin_memory=torch.cuda.is_available(),
         )
 
         iterator = cast(Iterator[EvalSequenceBatch], iter(test_loader))
         for batch in tqdm(iterator, desc="Evaluation", leave=False):
             batch = batch.to(device)
 
-            # Get SASRecNBR logits
-            logger.info("SASRecNBR scoring...")
             sasrec_logits = sasrec.score_all_items(sasrec.encode(context=batch.context))
 
-            if self._config.eval.alpha == 1.0:
+            # Single pass: compute global-repetition mask and optionally BLA scores
+            is_global_repeated, actr_scores = self._score_actr_batch(
+                batch=batch,
+                actr=actr,
+                actr_history_index=actr_history_index,
+                device=device,
+                compute_bla=alpha != 1.0,
+            )
+
+            # Late fusion
+            if alpha == 1.0:
                 final_scores = sasrec_logits
             else:
-                # Get ACT-R logits
-                logger.info("ACT-R scoring...")
-                actr_scores = self._get_actr_scores(
-                    batch, actr, actr_history_index, device
-                )
+                if actr_scores is None:
+                    raise ValueError("ACT-R scores must be computed when alpha != 1.0")
 
                 # Normalize both logits to the same scale and then combine (late fusion)
                 sasrec_probs = torch.softmax(sasrec_logits, dim=-1)
@@ -152,38 +164,47 @@ class IMPACTEvaluationPipeline:
                 actr_probs = torch.softmax(actr_scores, dim=-1)
                 del actr_scores  # Free up memory
 
-                sasrec_probs.mul_(self._config.eval.alpha)
-                sasrec_probs.add_(actr_probs, alpha=1.0 - self._config.eval.alpha)
+                # final_scores = alpha * sasrec_probs + (1 - alpha) * actr_probs
+                final_scores = sasrec_probs.mul_(alpha).add_(
+                    actr_probs, alpha=1.0 - alpha
+                )
                 del actr_probs
 
-                final_scores = sasrec_probs
-
-            logger.info("Computing metrics (batch level)...")
-            batch_metrics, num_rep, num_exp = self._compute_batch_metrics(
+            batch_metrics, counts = self._compute_batch_metrics(
                 final_scores=final_scores,
                 targets=batch.positive,
                 context=batch.context,
+                is_global_repeated=is_global_repeated,
             )
+
             for key, value in batch_metrics.items():
                 batch_metric_sums[key] += value
+            for key, value in counts.items():
+                total_counts[key] += value
 
-            total_samples += batch.positive.size(0)
-            total_rep_samples += num_rep
-            total_exp_samples += num_exp
+        logger.info("Aggregating metrics across batches")
 
-        logger.info("Computing final (aggregated) metrics...")
-        metric_prefixes = ("ndcg", "recall")
-        denominator_by_suffix = {
-            "": max(total_samples, 1),  # max(..., 1) to avoid division by zero
-            "_rep": max(total_rep_samples, 1),
-            "_exp": max(total_exp_samples, 1),
+        count_key_by_prefix: dict[str, str] = {
+            "ndcg": "global",
+            "recall": "global",
+            "ndcg_loc_rep": "loc_rep",
+            "recall_loc_rep": "loc_rep",
+            "ndcg_loc_exp": "loc_exp",
+            "recall_loc_exp": "loc_exp",
+            "ndcg_glb_rep": "glb_rep",
+            "recall_glb_rep": "glb_rep",
+            "ndcg_glb_exp": "glb_exp",
+            "recall_glb_exp": "glb_exp",
         }
-        metrics: dict[str, float] = {}
-        for k in self._config.eval.k_cutoffs:
-            for prefix in metric_prefixes:
-                for suffix, denominator in denominator_by_suffix.items():
-                    key = f"{prefix}{suffix}_at_{k}"
-                    metrics[key] = batch_metric_sums[key] / denominator
+
+        metrics: dict[str, float] = {
+            f"{prefix}_at_{k}": (
+                batch_metric_sums[f"{prefix}_at_{k}"]
+                / max(total_counts[count_key], 1)  # guard against empty split
+            )
+            for k in self._config.eval.k_cutoffs
+            for prefix, count_key in count_key_by_prefix.items()
+        }
 
         logger.info("Evaluation complete")
         return metrics
@@ -206,105 +227,169 @@ class IMPACTEvaluationPipeline:
 
         return sasrec
 
-    def _get_actr_scores(
+    def _score_actr_batch(
         self,
         batch: EvalSequenceBatch,
         actr: ACTR,
         actr_history_index: ACTRHistoryIndex,
         device: torch.device,
-    ) -> torch.Tensor:
-        """Compute per-user ACT-R scores and return the [B, num_items + 1] matrix."""
+        *,
+        compute_bla: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Resolve ACT-R history for each user and build per-batch scoring artifacts.
+
+        The bottleneck of the ACT-R scoring is querying the ACT-R history index.
+        A single pass per batch resolves both the global-repetition mask (which is
+        always required regardless of alpha) and the BLA score matrix (required only
+        when alpha < 1.0), avoiding redundant traversals.
+
+        Args:
+            batch: Current evaluation batch.
+            actr: Instantiated ACTR model.
+            actr_history_index: Pre-indexed event histories of the evaluation users.
+            device: Target compute device.
+            compute_bla: When False (i.e. pure SASRec, alpha == 1.0), skip BLA
+                computation, actr_scores in the return tuple will be None then.
+
+        Returns:
+            is_global_repeated: Bool tensor of shape [B, K]. True where a target item
+                appears anywhere in the user's global history before the eval cutoff.
+            actr_scores: Float32 tensor of shape [B, num_items + 1] containing BLA
+                scores, or None when compute_bla is False.
+        """
         batch_size = batch.positive.size(0)
-
-        # Create empty matrix of shape [B, num_items + 1] for ACT-R scores
-        actr_scores = torch.empty(
-            batch_size,
-            self._item_index.num_items + 1,
-            dtype=torch.float32,
-            device=device,
-        )
-
-        # Get batch samples metadata
         batch_uids = cast(list[int], batch.uid.tolist())
         batch_timestamps = cast(list[int], batch.target_ts.tolist())
 
+        is_global_repeated = torch.zeros_like(batch.positive, dtype=torch.bool)
+
+        # Create empty matrix of shape [B, num_items + 1] for ACT-R scores (if required)
+        actr_scores: torch.Tensor | None = (
+            torch.empty(
+                batch_size,
+                self._item_index.num_items + 1,
+                dtype=torch.float32,
+                device=device,
+            )
+            if compute_bla
+            else None
+        )
+
         # Calculate the BLA for each row in the batch
         for b_idx in range(batch_size):
-            uid = batch_uids[b_idx]
-            t_cutoff = batch_timestamps[b_idx]
-            item_ids, time_deltas, is_organic = actr_history_index.query(uid, t_cutoff)
-
-            # Calculate BLA for the user (on the correct device)
-            user_bla = actr.score_all_items(
-                item_ids=item_ids.to(device),
-                time_deltas=time_deltas.to(device),
-                is_organic=is_organic.to(device),
+            item_ids, time_deltas, is_organic = actr_history_index.query(
+                uid=batch_uids[b_idx],
+                t_cutoff=batch_timestamps[b_idx],
             )
+            item_ids = item_ids.to(device)
+            is_global_repeated[b_idx] = torch.isin(batch.positive[b_idx], item_ids)
 
-            # Update ACT-R scores
-            actr_scores[b_idx] = user_bla
+            # Update ACT-R scores (if required)
+            if actr_scores is not None:
+                actr_scores[b_idx] = actr.score_all_items(
+                    item_ids=item_ids,
+                    time_deltas=time_deltas.to(device),
+                    is_organic=is_organic.to(device),
+                )
 
-        return actr_scores
+        return is_global_repeated, actr_scores
 
     def _compute_batch_metrics(
         self,
         final_scores: torch.Tensor,
         targets: torch.Tensor,
         context: torch.Tensor,
-    ) -> tuple[dict[str, float], int, int]:
+        is_global_repeated: torch.Tensor,
+    ) -> tuple[dict[str, float], dict[str, int]]:
         """Compute weighted metric sums for one batch across all k cutoffs.
 
-        Derives repetition and exploration target subsets internally from targets
-        and context. Returns unnormalized sums (value * count); division by total
-        counts should happen in evaluate().
+        Derives repetition and exploration target subsets for both local (relative
+        to the L context sessions) and global (relative to the full user history)
+        scopes. Returns unnormalized sums (value * count); division by total counts
+        should happen in evaluate().
+
+        Args:
+            final_scores: [B, num_items + 1] Logit scores for the entire item catalog.
+            targets: [B, K] Ground-truth target sessions.
+            context: [B, L, K] The L context sessions for local scope evaluation.
+            is_global_repeated: [B, K] Boolean mask indicating if target items exist in
+                the user's global history.
 
         Returns:
-            Tuple of (metric_sums, num_rep, num_exp) where metric_sums contains
-            weighted sums keyed by metric name, num_rep and num_exp are the numbers of
-            samples with at least one repetition/exploration target in the batch.
+            Tuple of (metric_sums, counts) where metric_sums contains weighted sums
+            keyed by metric name, and counts contains the number of valid samples
+            for global, loc_rep, loc_exp, glb_rep, and glb_exp splits.
         """
-        context_flat = context.flatten(start_dim=1)  # [B, L*K]
+        # Local scope
+        context_flat = context.flatten(start_dim=1)  # [B, L * K]
 
         # Mask padding (unknown items)
         context_valid = context_flat.masked_fill(context_flat == 0, -1)
 
         # [B, K, 1] == [B, 1, L*K] --broadcast--> [B, K, L*K] -> [B, K]
-        _is_repeated = (targets.unsqueeze(2) == context_valid.unsqueeze(1)).any(dim=-1)
-        is_repeated = _is_repeated & (targets != 0)  # [B, K]
-        is_explored = (~_is_repeated) & (targets != 0)  # [B, K]
+        _is_loc_rep = (targets.unsqueeze(2) == context_valid.unsqueeze(1)).any(dim=-1)
+        is_loc_rep = _is_loc_rep & (targets != 0)  # [B, K]
+        is_loc_exp = (~_is_loc_rep) & (targets != 0)  # [B, K]
 
-        targets_rep = targets.masked_fill(~is_repeated, 0)
-        targets_exp = targets.masked_fill(~is_explored, 0)
+        # Global scope
+        is_glb_rep = is_global_repeated & (targets != 0)
+        is_glb_exp = (~is_global_repeated) & (targets != 0)
 
-        num_rep = int((targets_rep != 0).any(dim=-1).sum().item())
-        num_exp = int((targets_exp != 0).any(dim=-1).sum().item())
+        # Target subsets
+        targets_loc_rep = targets.masked_fill(~is_loc_rep, 0)
+        targets_loc_exp = targets.masked_fill(~is_loc_exp, 0)
+        targets_glb_rep = targets.masked_fill(~is_glb_rep, 0)
+        targets_glb_exp = targets.masked_fill(~is_glb_exp, 0)
 
-        batch_len = targets.size(0)
+        counts = {
+            "global": targets.size(0),
+            "loc_rep": int((targets_loc_rep != 0).any(dim=-1).sum().item()),
+            "loc_exp": int((targets_loc_exp != 0).any(dim=-1).sum().item()),
+            "glb_rep": int((targets_glb_rep != 0).any(dim=-1).sum().item()),
+            "glb_exp": int((targets_glb_exp != 0).any(dim=-1).sum().item()),
+        }
+
         batch_metrics: dict[str, float] = {}
 
         for k in self._config.eval.k_cutoffs:
-            # Global
+            # General (global)
             batch_metrics[f"ndcg_at_{k}"] = (
-                compute_ndcg_at_k(final_scores, targets, k=k) * batch_len
+                compute_ndcg_at_k(final_scores, targets, k) * counts["global"]
             )
             batch_metrics[f"recall_at_{k}"] = (
-                compute_recall_at_k(final_scores, targets, k=k) * batch_len
+                compute_recall_at_k(final_scores, targets, k) * counts["global"]
             )
 
-            # Repetition (P-Pop)
-            batch_metrics[f"ndcg_rep_at_{k}"] = (
-                compute_ndcg_at_k(final_scores, targets_rep, k=k) * num_rep
+            # Local
+            batch_metrics[f"ndcg_loc_rep_at_{k}"] = (
+                compute_ndcg_at_k(final_scores, targets_loc_rep, k) * counts["loc_rep"]
             )
-            batch_metrics[f"recall_rep_at_{k}"] = (
-                compute_recall_at_k(final_scores, targets_rep, k=k) * num_rep
+            batch_metrics[f"recall_loc_rep_at_{k}"] = (
+                compute_recall_at_k(final_scores, targets_loc_rep, k)
+                * counts["loc_rep"]
+            )
+            batch_metrics[f"ndcg_loc_exp_at_{k}"] = (
+                compute_ndcg_at_k(final_scores, targets_loc_exp, k) * counts["loc_exp"]
+            )
+            batch_metrics[f"recall_loc_exp_at_{k}"] = (
+                compute_recall_at_k(final_scores, targets_loc_exp, k)
+                * counts["loc_exp"]
             )
 
-            # Exploration (Discovery)
-            batch_metrics[f"ndcg_exp_at_{k}"] = (
-                compute_ndcg_at_k(final_scores, targets_exp, k=k) * num_exp
+            # Global
+            batch_metrics[f"ndcg_glb_rep_at_{k}"] = (
+                compute_ndcg_at_k(final_scores, targets_glb_rep, k) * counts["glb_rep"]
             )
-            batch_metrics[f"recall_exp_at_{k}"] = (
-                compute_recall_at_k(final_scores, targets_exp, k=k) * num_exp
+            batch_metrics[f"recall_glb_rep_at_{k}"] = (
+                compute_recall_at_k(final_scores, targets_glb_rep, k)
+                * counts["glb_rep"]
+            )
+            batch_metrics[f"ndcg_glb_exp_at_{k}"] = (
+                compute_ndcg_at_k(final_scores, targets_glb_exp, k) * counts["glb_exp"]
+            )
+            batch_metrics[f"recall_glb_exp_at_{k}"] = (
+                compute_recall_at_k(final_scores, targets_glb_exp, k)
+                * counts["glb_exp"]
             )
 
-        return batch_metrics, num_rep, num_exp
+        return batch_metrics, counts
