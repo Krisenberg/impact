@@ -33,7 +33,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --locked --all-extras --dev
+        run: uv sync --locked --dev --extra cpu
 
       - name: Run MyPy
         run: uv run mypy --config-file pyproject.toml
@@ -57,7 +57,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --locked --all-extras --dev
+        run: uv sync --locked --dev --extra cpu
 
       - name: Run Basedpyright
         run: uv run basedpyright --stats
