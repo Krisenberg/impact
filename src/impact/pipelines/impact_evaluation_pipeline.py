@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, cast, final
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, cast, final, get_args
 
 import numpy as np
 import structlog
@@ -30,16 +31,55 @@ if TYPE_CHECKING:
 
 logger = structlog.stdlib.get_logger(__name__)
 
+# Configured evaluation scopes
+EvalScopeKey = Literal["global", "local_rep", "local_exp", "global_rep", "global_exp"]
+
+
+def _metric_name(metric: str, scope: EvalScopeKey, k: int) -> str:
+    """Return a canonical metric name for a given k cutoff and evaluation scope."""
+    return f"{metric}_at_{k}" if scope == "global" else f"{metric}_{scope}_at_{k}"
+
+
+@dataclass(frozen=True, slots=True)
+class _TargetSplits:
+    """Ground-truth target tensors masked to each evaluation scope.
+
+    Derived from the raw target tensor by zeroing out (0 is the padding token) items
+    that do not belong to a given evaluation scope.
+
+    Attributes:
+        global_: [B, K] unmasked ground-truth targets.
+        local_rep: [B, K] targets that appeared in the context window.
+        local_exp: [B, K] targets that did not appear in the context window.
+        global_rep: [B, K] targets that appeared previously in the user's full history.
+        global_exp: [B, K] targets that did not appear previously in the user's history.
+    """
+
+    global_: torch.Tensor
+    local_rep: torch.Tensor
+    local_exp: torch.Tensor
+    global_rep: torch.Tensor
+    global_exp: torch.Tensor
+
 
 @final
 class IMPACTEvaluationPipeline:
-    """IMPACT core: late-fusion evaluation of SASRecNBR and ACT-R on held-out test data.
+    """Late-fusion evaluation pipeline for the IMPACT framework.
 
-    Loads a trained SASRecNBR checkpoint, builds an ACT-R history index for test users,
-    and scores both models against the full item catalog. Final scores are a weighted
-    combination controlled by `ImpactConfig.eval.alpha` (1 = SASRec only, 0 = ACT-R
-    only). Global (vanilla), repetition-focused, and exploration-focused NDCG@K and
-    Recall@K are reported for each configured k cutoff.
+    Combines a trained SASRecNBR model with a deterministic ACT-R scorer via a weighted
+    combination controlled by `ImpactConfig.eval.alpha` (1.0 = SASRec only, 0.0 = ACT-R
+    only). Both models score the full item catalog; their probability distributions are
+    then fused and evaluated against held-out test sessions.
+
+    Reported metrics are NDCG@k and Recall@k decomposed across five evaluation scopes:
+    - global: all target items.
+    - local_rep / local_exp: items repeated from or absent in the L context sessions
+        (i.e. short-term novelty).
+    - global_rep / global_exp: items repeated from or absent in the user's full
+        interaction history (i.e. long-term novelty).
+
+    This decomposition lets the caller analyze the repetition-exploration trade-off
+    introduced by varying alpha.
     """
 
     def __init__(
@@ -48,7 +88,7 @@ class IMPACTEvaluationPipeline:
         item_index: ItemIndex,
         events_lf: pl.LazyFrame,
     ) -> None:
-        """Initialize the evaluation pipeline.
+        """Initialize the IMPACT Framework evaluation pipeline.
 
         Args:
             config: Complete IMPACT Framework configuration.
@@ -67,10 +107,21 @@ class IMPACTEvaluationPipeline:
         split: TensorizedSplit,
         sasrec_state_dict_path: Path,
     ) -> dict[str, float]:
-        """Evaluate the IMPACT model on the test split at multiple cutoff levels.
+        """Evaluate the IMPACT model on the held-out test split.
 
-        Builds the ACT-R history index for test users, runs batched inference,
-        and computes sample-weighted metrics at all configured cutoff levels.
+        Loads the SASRecNBR checkpoint, builds the ACT-R history index for test users,
+        and runs batched inference over the full item catalog. Final scores are
+        a combination of SASRec and ACT-R probabilities (late-fusion) controlled by
+        `ImpactConfig.eval.alpha` (1.0 = SASRec only, 0.0 = ACT-R only).
+
+        Metrics are computed at every cutoff listed in `ImpactConfig.eval.k_cutoffs`
+        and returned as a flat dictionary. The key schema is:
+
+            `{metric}_{scope}_at_{k}`
+
+        where `metric` is `ndcg` or `recall`, `scope` is either empty (for the overall
+        metric) or is one of `local_rep`, `local_exp`, `global_rep`, `global_exp`,
+        and `k` is the cutoff. Examples: ndcg_at_5, recall_global_exp_at_10.
 
         Args:
             split: Tensorized train/val/test temporal splits; only the test partition
@@ -78,8 +129,7 @@ class IMPACTEvaluationPipeline:
             sasrec_state_dict_path: Path to the saved SASRecNBR checkpoint.
 
         Returns:
-            Dictionary of ndcg_at_{k}, recall_at_{k}, and all local/global
-            repetition- and exploration-focused variants for each configured k cutoff.
+            Flat metric dictionary with `10 * len(ImpactConfig.eval.k_cutoffs)` entries.
         """
         logger.info("Starting evaluation pipeline")
 
@@ -101,28 +151,14 @@ class IMPACTEvaluationPipeline:
             eps=self._config.actr.eps,
         )
 
-        metric_prefixes = (
-            "ndcg",
-            "recall",
-            "ndcg_loc_rep",
-            "recall_loc_rep",
-            "ndcg_loc_exp",
-            "recall_loc_exp",
-            "ndcg_glb_rep",
-            "recall_glb_rep",
-            "ndcg_glb_exp",
-            "recall_glb_exp",
-        )
-
         metric_names: list[str] = [
-            f"{prefix}_at_{k}"
+            _metric_name(metric, scope, k)
             for k in self._config.eval.k_cutoffs
-            for prefix in metric_prefixes
+            for metric in ("ndcg", "recall")
+            for scope in get_args(EvalScopeKey)
         ]
         batch_metric_sums: dict[str, float] = dict.fromkeys(metric_names, 0.0)
-        total_counts: dict[str, int] = dict.fromkeys(
-            ("global", "loc_rep", "loc_exp", "glb_rep", "glb_exp"), 0
-        )
+        total_counts: dict[str, int] = dict.fromkeys(get_args(EvalScopeKey), 0)
 
         test_loader = DataLoader[EvalSequenceSample](
             dataset=EvalSequenceDataset(split.test),
@@ -141,8 +177,8 @@ class IMPACTEvaluationPipeline:
 
             sasrec_logits = sasrec.score_all_items(sasrec.encode(context=batch.context))
 
-            # Single pass: compute global-repetition mask and optionally BLA scores
-            is_global_repeated, actr_scores = self._score_actr_batch(
+            # Compute global-repetition mask and optionally BLA scores in a single pass
+            is_global_repeated, bla_scores = self._score_actr_batch(
                 batch=batch,
                 actr=actr,
                 actr_history_index=actr_history_index,
@@ -154,15 +190,15 @@ class IMPACTEvaluationPipeline:
             if alpha == 1.0:
                 final_scores = sasrec_logits
             else:
-                if actr_scores is None:
+                if bla_scores is None:
                     raise ValueError("ACT-R scores must be computed when alpha != 1.0")
 
                 # Normalize both logits to the same scale and then combine (late fusion)
                 sasrec_probs = torch.softmax(sasrec_logits, dim=-1)
                 del sasrec_logits  # Free up memory
 
-                actr_probs = torch.softmax(actr_scores, dim=-1)
-                del actr_scores  # Free up memory
+                actr_probs = torch.softmax(bla_scores, dim=-1)
+                del bla_scores  # Free up memory
 
                 # final_scores = alpha * sasrec_probs + (1 - alpha) * actr_probs
                 final_scores = sasrec_probs.mul_(alpha).add_(
@@ -170,40 +206,30 @@ class IMPACTEvaluationPipeline:
                 )
                 del actr_probs
 
-            batch_metrics, counts = self._compute_batch_metrics(
-                final_scores=final_scores,
+            target_splits = self._derive_target_splits(
                 targets=batch.positive,
                 context=batch.context,
                 is_global_repeated=is_global_repeated,
             )
+            batch_metrics, counts = self._compute_batch_metrics(
+                final_scores=final_scores,
+                target_splits=target_splits,
+            )
 
-            for key, value in batch_metrics.items():
-                batch_metric_sums[key] += value
-            for key, value in counts.items():
-                total_counts[key] += value
+            for metric, sum_ in batch_metrics.items():
+                batch_metric_sums[metric] += sum_
+            for scope, count in counts.items():
+                total_counts[scope] += count
 
         logger.info("Aggregating metrics across batches")
-
-        count_key_by_prefix: dict[str, str] = {
-            "ndcg": "global",
-            "recall": "global",
-            "ndcg_loc_rep": "loc_rep",
-            "recall_loc_rep": "loc_rep",
-            "ndcg_loc_exp": "loc_exp",
-            "recall_loc_exp": "loc_exp",
-            "ndcg_glb_rep": "glb_rep",
-            "recall_glb_rep": "glb_rep",
-            "ndcg_glb_exp": "glb_exp",
-            "recall_glb_exp": "glb_exp",
-        }
-
         metrics: dict[str, float] = {
-            f"{prefix}_at_{k}": (
-                batch_metric_sums[f"{prefix}_at_{k}"]
-                / max(total_counts[count_key], 1)  # guard against empty split
+            _metric_name(metric, scope, k): (
+                batch_metric_sums[_metric_name(metric, scope, k)]
+                / max(total_counts[scope], 1)  # guard against empty split
             )
             for k in self._config.eval.k_cutoffs
-            for prefix, count_key in count_key_by_prefix.items()
+            for metric in ("ndcg", "recall")
+            for scope in get_args(EvalScopeKey)
         }
 
         logger.info("Evaluation complete")
@@ -236,26 +262,31 @@ class IMPACTEvaluationPipeline:
         *,
         compute_bla: bool,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Resolve ACT-R history for each user and build per-batch scoring artifacts.
+        """Query ACT-R history index once per user and return batch-level artifacts.
 
-        The bottleneck of the ACT-R scoring is querying the ACT-R history index.
-        A single pass per batch resolves both the global-repetition mask (which is
-        always required regardless of alpha) and the BLA score matrix (required only
-        when alpha < 1.0), avoiding redundant traversals.
+        For each user in the batch, a single ACT-R history lookup yields:
+        - a global repetition mask required for computing metrics at different
+            evaluation scopes,
+        - ACT-R BLA scores used for the final IMPACT evaluation.
+
+        Collecting both in one pass avoids querying the history index twice, which can
+        be a bottleneck for larger dataset variants.
 
         Args:
             batch: Current evaluation batch.
             actr: Instantiated ACTR model.
-            actr_history_index: Pre-indexed event histories of the evaluation users.
-            device: Target compute device.
-            compute_bla: When False (i.e. pure SASRec, alpha == 1.0), skip BLA
-                computation, actr_scores in the return tuple will be None then.
+            actr_history_index: Pre-indexed event histories for all evaluation users.
+            device: Target compute device for output tensors.
+            compute_bla: When False (i.e. pure SASRec, alpha == 1.0), BLA computation
+                is skipped and the second output element is None.
 
         Returns:
-            is_global_repeated: Bool tensor of shape [B, K]. True where a target item
-                appears anywhere in the user's global history before the eval cutoff.
-            actr_scores: Float32 tensor of shape [B, num_items + 1] containing BLA
-                scores, or None when compute_bla is False.
+            Results of resolving ACT-R history for the users in the evaluation batch:
+            - [B, K] boolean mask indicating whether each target item appeared in the
+                user's interaction history before the evaluation cutoff.
+            - [B, num_items + 1] float tensor containing ACT-R Base-Level Activation
+                scores for all items in the catalog, or None when BLA computation is
+                skipped (pure-SASRec mode, alpha == 1.0).
         """
         batch_size = batch.positive.size(0)
         batch_uids = cast(list[int], batch.uid.tolist())
@@ -263,8 +294,8 @@ class IMPACTEvaluationPipeline:
 
         is_global_repeated = torch.zeros_like(batch.positive, dtype=torch.bool)
 
-        # Create empty matrix of shape [B, num_items + 1] for ACT-R scores (if required)
-        actr_scores: torch.Tensor | None = (
+        # [B, num_items + 1] empty matrix for ACT-R scores (if required)
+        bla_scores: torch.Tensor | None = (
             torch.empty(
                 batch_size,
                 self._item_index.num_items + 1,
@@ -284,112 +315,103 @@ class IMPACTEvaluationPipeline:
             item_ids = item_ids.to(device)
             is_global_repeated[b_idx] = torch.isin(batch.positive[b_idx], item_ids)
 
-            # Update ACT-R scores (if required)
-            if actr_scores is not None:
-                actr_scores[b_idx] = actr.score_all_items(
+            if bla_scores is not None:
+                bla_scores[b_idx] = actr.score_all_items(
                     item_ids=item_ids,
                     time_deltas=time_deltas.to(device),
                     is_organic=is_organic.to(device),
                 )
 
-        return is_global_repeated, actr_scores
+        return is_global_repeated, bla_scores
 
     def _compute_batch_metrics(
         self,
         final_scores: torch.Tensor,
+        target_splits: _TargetSplits,
+    ) -> tuple[dict[str, float], dict[EvalScopeKey, int]]:
+        """Compute metric sums (unnormalized) for one batch across all k cutoffs.
+
+        For each configured k and each evaluation scope, computes NDCG@k and Recall@k
+        weighted by the number of valid samples in that scope (value * count). Division
+        by cumulative counts is done in `evaluate()` so that final metric averages are
+        correct across batches.
+
+        Args:
+            final_scores: [B, num_items + 1] final score tensor after late-fusion with
+                either probabilities or logits (relative ordering is what matters).
+            target_splits: Scope-masked target tensors, as returned by
+                `_derive_target_splits`.
+
+        Returns:
+            metric_sums: Metric sums keyed by canonical metric name (e.g., "ndcg_at_5",
+                "recall_global_exp_at_5").
+            counts: Number of valid (non-empty) samples per `EvalScopeKey`.
+        """
+        counts: dict[EvalScopeKey, int] = {
+            "global": target_splits.global_.size(0),
+            "local_rep": int((target_splits.local_rep != 0).any(dim=-1).sum().item()),
+            "local_exp": int((target_splits.local_exp != 0).any(dim=-1).sum().item()),
+            "global_rep": int((target_splits.global_rep != 0).any(dim=-1).sum().item()),
+            "global_exp": int((target_splits.global_exp != 0).any(dim=-1).sum().item()),
+        }
+
+        metric_scopes: list[tuple[EvalScopeKey, torch.Tensor, int]] = [
+            ("global", target_splits.global_, counts["global"]),
+            ("local_rep", target_splits.local_rep, counts["local_rep"]),
+            ("local_exp", target_splits.local_exp, counts["local_exp"]),
+            ("global_rep", target_splits.global_rep, counts["global_rep"]),
+            ("global_exp", target_splits.global_exp, counts["global_exp"]),
+        ]
+
+        batch_metrics: dict[str, float] = {}
+        for k in self._config.eval.k_cutoffs:
+            for scope, targets, count in metric_scopes:
+                batch_metrics[_metric_name("ndcg", scope, k)] = (
+                    compute_ndcg_at_k(final_scores, targets, k) * count
+                )
+                batch_metrics[_metric_name("recall", scope, k)] = (
+                    compute_recall_at_k(final_scores, targets, k) * count
+                )
+
+        return batch_metrics, counts
+
+    def _derive_target_splits(
+        self,
         targets: torch.Tensor,
         context: torch.Tensor,
         is_global_repeated: torch.Tensor,
-    ) -> tuple[dict[str, float], dict[str, int]]:
-        """Compute weighted metric sums for one batch across all k cutoffs.
-
-        Derives repetition and exploration target subsets for both local (relative
-        to the L context sessions) and global (relative to the full user history)
-        scopes. Returns unnormalized sums (value * count); division by total counts
-        should happen in evaluate().
+    ) -> _TargetSplits:
+        """Derive scope-masked target tensors for all evaluation scopes.
 
         Args:
-            final_scores: [B, num_items + 1] Logit scores for the entire item catalog.
-            targets: [B, K] Ground-truth target sessions.
-            context: [B, L, K] The L context sessions for local scope evaluation.
-            is_global_repeated: [B, K] Boolean mask indicating if target items exist in
+            targets: [B, K] ground-truth target sessions (with 0 as the padding token).
+            context: [B, L, K] context sessions for local scope evaluation.
+            is_global_repeated: [B, K] boolean mask indicating if target items exist in
                 the user's global history.
 
         Returns:
-            Tuple of (metric_sums, counts) where metric_sums contains weighted sums
-            keyed by metric name, and counts contains the number of valid samples
-            for global, loc_rep, loc_exp, glb_rep, and glb_exp splits.
+            _TargetSplits with one [B, K] masked target tensor per scope.
         """
-        # Local scope
-        context_flat = context.flatten(start_dim=1)  # [B, L * K]
-
-        # Mask padding (unknown items)
+        context_flat = context.flatten(start_dim=1)  # [B, L*K]
+        # [B, L*K] replace padding with -1 to 'release' the padding token
         context_valid = context_flat.masked_fill(context_flat == 0, -1)
 
         # [B, K, 1] == [B, 1, L*K] --broadcast--> [B, K, L*K] -> [B, K]
-        _is_loc_rep = (targets.unsqueeze(2) == context_valid.unsqueeze(1)).any(dim=-1)
-        is_loc_rep = _is_loc_rep & (targets != 0)  # [B, K]
-        is_loc_exp = (~_is_loc_rep) & (targets != 0)  # [B, K]
+        valid = targets != 0
+        _is_local_rep = (targets.unsqueeze(2) == context_valid.unsqueeze(1)).any(dim=-1)
+
+        # Local scope
+        is_local_rep = _is_local_rep & valid
+        is_local_exp = (~_is_local_rep) & valid
 
         # Global scope
-        is_glb_rep = is_global_repeated & (targets != 0)
-        is_glb_exp = (~is_global_repeated) & (targets != 0)
+        is_global_rep = is_global_repeated & valid
+        is_global_exp = (~is_global_repeated) & valid
 
-        # Target subsets
-        targets_loc_rep = targets.masked_fill(~is_loc_rep, 0)
-        targets_loc_exp = targets.masked_fill(~is_loc_exp, 0)
-        targets_glb_rep = targets.masked_fill(~is_glb_rep, 0)
-        targets_glb_exp = targets.masked_fill(~is_glb_exp, 0)
-
-        counts = {
-            "global": targets.size(0),
-            "loc_rep": int((targets_loc_rep != 0).any(dim=-1).sum().item()),
-            "loc_exp": int((targets_loc_exp != 0).any(dim=-1).sum().item()),
-            "glb_rep": int((targets_glb_rep != 0).any(dim=-1).sum().item()),
-            "glb_exp": int((targets_glb_exp != 0).any(dim=-1).sum().item()),
-        }
-
-        batch_metrics: dict[str, float] = {}
-
-        for k in self._config.eval.k_cutoffs:
-            # General (global)
-            batch_metrics[f"ndcg_at_{k}"] = (
-                compute_ndcg_at_k(final_scores, targets, k) * counts["global"]
-            )
-            batch_metrics[f"recall_at_{k}"] = (
-                compute_recall_at_k(final_scores, targets, k) * counts["global"]
-            )
-
-            # Local
-            batch_metrics[f"ndcg_loc_rep_at_{k}"] = (
-                compute_ndcg_at_k(final_scores, targets_loc_rep, k) * counts["loc_rep"]
-            )
-            batch_metrics[f"recall_loc_rep_at_{k}"] = (
-                compute_recall_at_k(final_scores, targets_loc_rep, k)
-                * counts["loc_rep"]
-            )
-            batch_metrics[f"ndcg_loc_exp_at_{k}"] = (
-                compute_ndcg_at_k(final_scores, targets_loc_exp, k) * counts["loc_exp"]
-            )
-            batch_metrics[f"recall_loc_exp_at_{k}"] = (
-                compute_recall_at_k(final_scores, targets_loc_exp, k)
-                * counts["loc_exp"]
-            )
-
-            # Global
-            batch_metrics[f"ndcg_glb_rep_at_{k}"] = (
-                compute_ndcg_at_k(final_scores, targets_glb_rep, k) * counts["glb_rep"]
-            )
-            batch_metrics[f"recall_glb_rep_at_{k}"] = (
-                compute_recall_at_k(final_scores, targets_glb_rep, k)
-                * counts["glb_rep"]
-            )
-            batch_metrics[f"ndcg_glb_exp_at_{k}"] = (
-                compute_ndcg_at_k(final_scores, targets_glb_exp, k) * counts["glb_exp"]
-            )
-            batch_metrics[f"recall_glb_exp_at_{k}"] = (
-                compute_recall_at_k(final_scores, targets_glb_exp, k)
-                * counts["glb_exp"]
-            )
-
-        return batch_metrics, counts
+        return _TargetSplits(
+            global_=targets,
+            local_rep=targets.masked_fill(~is_local_rep, 0),
+            local_exp=targets.masked_fill(~is_local_exp, 0),
+            global_rep=targets.masked_fill(~is_global_rep, 0),
+            global_exp=targets.masked_fill(~is_global_exp, 0),
+        )
