@@ -249,7 +249,7 @@ executionEnvironments = [
   { root = "scripts/plots.py", reportAny = false, reportExplicitAny = false },
   { root = "scripts/tables.py", reportAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
-  { root = "src/impact/config.py", reportExplicitAny = false },
+  { root = "src/impact/config.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/main.py", reportExplicitAny = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src/impact/features/sequence_extraction.py", reportExplicitAny = false },

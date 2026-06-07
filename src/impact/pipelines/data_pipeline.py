@@ -225,14 +225,14 @@ class DataPipeline:
             success_marker.touch()
             logger.info("Temporal splits computed successfully")
 
-        split = TemporalSplit(
+        temporal_split = TemporalSplit(
             train=ParquetTableSet.from_dir(train_cache_dir),
             val=ParquetTableSet.from_dir(val_cache_dir),
             test=ParquetTableSet.from_dir(test_cache_dir),
         )
         item_index = ItemIndex(table=ParquetTableSet.from_dir(item_to_idx_cache_dir))
 
-        return split, item_index
+        return temporal_split, item_index
 
     def tensorize(self, split: TemporalSplit) -> TensorizedSplit:
         """Tensorize a given TemporalSplit into memory-mapped NumPy arrays.

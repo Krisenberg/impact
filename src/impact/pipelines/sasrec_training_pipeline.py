@@ -213,7 +213,7 @@ class SASRecTrainingPipeline:
             loss = bce_loss(pos_scores, neg_scores)
 
             # Backward pass
-            _ = loss.backward()
+            _ = loss.backward()  # type: ignore[no-untyped-call]
             _ = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
 
