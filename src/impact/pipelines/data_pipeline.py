@@ -1,14 +1,17 @@
-"""Orchestrator for the IMPACT data processing pipeline."""
-
 import shutil
 from pathlib import Path
-from typing import cast
 
 import polars as pl
 import structlog
 
 from impact.config import ImpactConfig
-from impact.schemas import MemmapDataset, MemmapSplit, ParquetDataset, SequenceSplit
+from impact.schemas import (
+    ItemIndex,
+    ParquetTableSet,
+    TemporalSplit,
+    TensorizedDataset,
+    TensorizedSplit,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -50,10 +53,10 @@ class DataPipeline:
 
         fetcher = YambdaFetcher(
             cache_dir=self.raw_dir,
-            dataset_type=self.config.dataset_type,
-            dataset_size=self.config.dataset_size,
+            dataset_type=self.config.dataset.format,
+            dataset_size=self.config.dataset.size,
         )
-        return fetcher.get_interactions(event_type=self.config.interaction_type)
+        return fetcher.get_interactions(event_type=self.config.dataset.interaction_type)
 
     def get_sessions(self, n_partitions: int = 1) -> pl.LazyFrame:
         """Get sessionized data, computing it if not cached.
@@ -66,7 +69,7 @@ class DataPipeline:
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
 
-        from impact.dataset import extract_sessions
+        from impact.features import sessionize
 
         sessions_dir = (
             self.interim_dir / self.config.dataset_id / self.config.sessionization_id
@@ -90,11 +93,11 @@ class DataPipeline:
 
             for i in range(n_partitions):
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
-                extract_sessions(
+                sessionize(
                     events_lf=events_lf.filter(pl.col("uid") % n_partitions == i),
-                    inactivity_gap_seconds=self.config.inactivity_gap_seconds,
-                    tracks_per_session=self.config.tracks_per_session,
-                    min_listen_seconds=self.config.min_listen_seconds,
+                    inactivity_gap_seconds=self.config.session.inactivity_gap_seconds,
+                    tracks_per_session=self.config.session.tracks_per_session,
+                    min_listen_seconds=self.config.session.min_listen_seconds,
                 ).sink_parquet(sessions_dir / f"sessions_part_{i}.parquet")
 
             # Mark as completed
@@ -119,7 +122,7 @@ class DataPipeline:
             self.interim_dir
             / self.config.dataset_id
             / self.config.sessionization_id
-            / self.config.sequencing_id
+            / self.config.sequence_extraction_id
         )
         success_marker = sequences_dir / "_SUCCESS"
 
@@ -143,8 +146,8 @@ class DataPipeline:
 
                 extract_sequences(
                     sessions_lf=sessions_lf.filter(pl.col("uid") % n_partitions == i),
-                    context_sessions=self.config.context_sessions,
-                    step=self.config.step,
+                    context_sessions=self.config.sequence.context_sessions,
+                    step=self.config.sequence.step,
                     assign_index=False,  # Assign global index after merging
                 ).sink_parquet(sequences_dir / f"sequences_part_{i}.parquet")
 
@@ -160,7 +163,7 @@ class DataPipeline:
         self,
         n_partitions: int = 1,
         compute_ram_fraction: float = 0.15,
-    ) -> SequenceSplit:
+    ) -> tuple[TemporalSplit, ItemIndex]:
         """Get final train/val/test splits, computing them if not cached.
 
         Args:
@@ -168,20 +171,20 @@ class DataPipeline:
                 large datasets that exceed available RAM (data is partitioned by user,
                 i.e. uid column).
             compute_ram_fraction: Fraction of available RAM allowed per processing
-                partition. It should be keept low (<=0.15) to account for memory spikes
+                partition. It should be kept low (<=0.15) to account for memory spikes
                 during joins, explodes, and struct (non-streamable) Polars operations.
         """
         if n_partitions < 1:
             raise ValueError("Number of partitions must be greater than 0.")
 
-        from impact.features import split_sequences_train_val_test
+        from impact.features import split
 
         splits_dir = (
             self.processed_dir
             / self.config.dataset_id
             / self.config.sessionization_id
-            / self.config.sequencing_id
-            / self.config.timesplit_id
+            / self.config.sequence_extraction_id
+            / self.config.temporal_split_id
         )
         item_to_idx_cache_dir = splits_dir / "item_to_idx"
         train_cache_dir = splits_dir / "train"
@@ -206,15 +209,15 @@ class DataPipeline:
 
             # Discard the result as it has to be recreated at the end either way
             # (because of caching)
-            _ = split_sequences_train_val_test(
+            _ = split(
                 sequences_lf=sequences_lf,
                 train_dir=train_cache_dir,
                 val_dir=val_cache_dir,
                 test_dir=test_cache_dir,
                 item_to_idx_dir=item_to_idx_cache_dir,
-                test_days=self.config.test_days,
-                val_days=self.config.val_days,
-                gap_minutes=self.config.gap_minutes,
+                test_days=self.config.gts.test_days,
+                val_days=self.config.gts.val_days,
+                gap_minutes=self.config.gts.gap_minutes,
                 compute_ram_fraction=compute_ram_fraction,
             )
 
@@ -222,15 +225,17 @@ class DataPipeline:
             success_marker.touch()
             logger.info("Temporal splits computed successfully")
 
-        return SequenceSplit(
-            train=ParquetDataset.from_dir(train_cache_dir),
-            val=ParquetDataset.from_dir(val_cache_dir),
-            test=ParquetDataset.from_dir(test_cache_dir),
-            item_to_idx=ParquetDataset.from_dir(item_to_idx_cache_dir),
+        temporal_split = TemporalSplit(
+            train=ParquetTableSet.from_dir(train_cache_dir),
+            val=ParquetTableSet.from_dir(val_cache_dir),
+            test=ParquetTableSet.from_dir(test_cache_dir),
         )
+        item_index = ItemIndex(table=ParquetTableSet.from_dir(item_to_idx_cache_dir))
 
-    def tensorize(self, split: SequenceSplit) -> MemmapSplit:
-        """Tensorize a given SequenceSplit into memory-mapped NumPy arrays.
+        return temporal_split, item_index
+
+    def tensorize(self, split: TemporalSplit) -> TensorizedSplit:
+        """Tensorize a given TemporalSplit into memory-mapped NumPy arrays.
 
         Converts each Parquet-backed split into dense [N, L, K] arrays suitable for
         out-of-core PyTorch training. Results are cached under the pipeline's
@@ -240,7 +245,7 @@ class DataPipeline:
             split: Temporal dataset splits, as returned by `get_splits()`.
 
         Returns:
-            MemmapSplit with memory-mapped train, val, and test arrays.
+            TensorizedSplit with memory-mapped train, val, and test arrays.
         """
         from impact.features import tensorize
 
@@ -248,8 +253,8 @@ class DataPipeline:
             self.processed_dir
             / self.config.dataset_id
             / self.config.sessionization_id
-            / self.config.sequencing_id
-            / self.config.timesplit_id
+            / self.config.sequence_extraction_id
+            / self.config.temporal_split_id
             / "tensors"
         )
         success_marker = tensors_dir / "_SUCCESS"
@@ -276,19 +281,18 @@ class DataPipeline:
                 _ = tensorize(
                     dataset=dataset,
                     out_dir=tensors_dir / name,
-                    tracks_per_session=self.config.tracks_per_session,
-                    context_sessions=self.config.context_sessions,
+                    tracks_per_session=self.config.session.tracks_per_session,
+                    context_sessions=self.config.sequence.context_sessions,
                 )
 
             # Mark as completed
             success_marker.touch()
             logger.info("Tensorized splits computed successfully")
 
-        return MemmapSplit(
-            train=MemmapDataset.from_dir(tensors_dir / "train"),
-            val=MemmapDataset.from_dir(tensors_dir / "val"),
-            test=MemmapDataset.from_dir(tensors_dir / "test"),
-            num_items=cast(int, split.item_to_idx.lf.select(pl.len()).collect().item()),
+        return TensorizedSplit(
+            train=TensorizedDataset.from_dir(tensors_dir / "train"),
+            val=TensorizedDataset.from_dir(tensors_dir / "val"),
+            test=TensorizedDataset.from_dir(tensors_dir / "test"),
         )
 
     def _save_to_cache(

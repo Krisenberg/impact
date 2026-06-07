@@ -1,3 +1,5 @@
+"""Module defining domain schemas and data containers for the IMPACT framework."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,10 +17,10 @@ logger = structlog.stdlib.get_logger(__name__)
 
 
 @dataclass(frozen=True)
-class ParquetDataset:
-    """A logical dataset backed by one or more physical Parquet files.
+class ParquetTableSet:
+    """A logical data table backed by one or more physical Parquet files (shards).
 
-    Provides an abstract interface for both single-file and partitioned datasets.
+    Provides an abstract interface for both single-file and partitioned data tables.
     All files are treated as one logical table and scanned / collected together.
 
     Use `from_dir()` to reconstruct from a specific directory, and `file_name()` to
@@ -31,7 +33,7 @@ class ParquetDataset:
 
     @cached_property
     def lf(self) -> pl.LazyFrame:
-        """Parquet files lazily scanned into a single LazyFrame."""
+        """LazyFrame scanning all Parquet files in this table set."""
         return pl.scan_parquet(self.paths)
 
     def collect(self) -> pl.DataFrame:
@@ -41,16 +43,16 @@ class ParquetDataset:
         to fit within available memory.
         """
         logger.warning(
-            "Materializing Parquet table into RAM (might exceed available RAM)"
+            "Materializing Parquet table set into RAM (might exceed available RAM)"
         )
         return self.lf.collect()
 
     @classmethod
-    def from_dir(cls, directory: Path) -> ParquetDataset:
-        """Reconstruct a ParquetDataset from a cache directory.
+    def from_dir(cls, directory: Path) -> ParquetTableSet:
+        """Reconstruct a ParquetTableSet from a cache directory.
 
         Discovers all files matching the specified pattern and returns them as a single
-        logical dataset (sorted for deterministic ordering).
+        logical table (sorted for deterministic ordering).
 
         Raises:
             FileNotFoundError: If no matching Parquet files exist in the directory.
@@ -71,33 +73,42 @@ class ParquetDataset:
 
 
 @dataclass(frozen=True)
-class SequenceSplit:
-    """Container for temporal dataset splits and their physical representations.
+class ItemIndex:
+    """A train-derived index mapping raw item (track) IDs to contiguous 1-based indices.
 
-    All splits are backed by cached Parquet files and share a common item-to-index
-    mapping (1-based) derived from the train set. Items unseen during training map to
-    index 0.
+    Defines the item representation used throughout the recommendation pipeline.
+    The index is constructed exclusively from items observed in the training split and
+    provides a shared, contiguous index space for train, validation, and test datasets.
+
+    Indices are 1-based, with index 0 reserved for padding and items unseen during
+    index construction (cold-start). The index is backed by a ParquetTableSet and is
+    used for tensorization, negative sampling, model outputs, and evaluation.
     """
 
-    train: ParquetDataset
-    val: ParquetDataset
-    test: ParquetDataset
-    item_to_idx: ParquetDataset  # columns: item_id (UInt32), idx (UInt32, 1-based)
+    table: ParquetTableSet  # columns: item_id (UInt32), idx (UInt32, 1-based)
+
+    @cached_property
+    def num_items(self) -> int:
+        """Total number of unique, recommendable items (tracks) in the index."""
+        return cast(int, self.table.lf.select(pl.len()).collect().item())
 
 
 @dataclass(frozen=True)
-class MemmapDataset:
-    """Tensorized dataset backed by memory-mapped NumPy arrays.
+class TensorizedDataset:
+    """A tensorized dataset backed by memory-mapped NumPy arrays.
 
-    Arrays are produced by `features.tensorize()` and intended for out-of-core PyTorch
-    training via `np.load(..., mmap_mode="r")`.
+    Provides an abstract interface for tensorized training examples stored on disk.
+    Input contexts and prediction targets are represented as NumPy arrays and loaded
+    lazily via memory mapping to support out-of-core training.
 
-    Use `from_dir()` to reconstruct from a directory containing the tensorized files,
-    ensuring filename consistency with the constants defined on this class.
+    Use `from_dir()` to reconstruct a tensorized dataset from a directory containing
+    the expected array files, ensuring filename consistency.
     """
 
     _CONTEXT_FILE: ClassVar[str] = "context.npy"
     _TARGET_FILE: ClassVar[str] = "target.npy"
+    _UID_FILE: ClassVar[str] = "uid.npy"
+    _TARGET_TS_FILE: ClassVar[str] = "target_ts.npy"
     _META_FILE: ClassVar[str] = "meta.npy"
 
     directory: Path
@@ -117,6 +128,16 @@ class MemmapDataset:
         """Path to target.npy file."""
         return self.directory / self._TARGET_FILE
 
+    @property
+    def uid_file_path(self) -> Path:
+        """Path to uid.npy file."""
+        return self.directory / self._UID_FILE
+
+    @property
+    def target_ts_file_path(self) -> Path:
+        """Path to target_ts.npy file."""
+        return self.directory / self._TARGET_TS_FILE
+
     @cached_property
     def meta(self) -> tuple[int, int, int]:
         """Tuple of (N, L, K) from meta.npy file."""
@@ -133,25 +154,54 @@ class MemmapDataset:
         """Memory-mapped target array of shape [N, K]."""
         return cast(np.ndarray, np.load(self.target_file_path, mmap_mode="r"))
 
+    @cached_property
+    def uid(self) -> np.ndarray:
+        """Memory-mapped array with user IDs of shape [N]."""
+        return cast(np.ndarray, np.load(self.uid_file_path, mmap_mode="r"))
+
+    @cached_property
+    def target_ts(self) -> np.ndarray:
+        """Memory-mapped array with target session start timestamps of shape [N]."""
+        return cast(np.ndarray, np.load(self.target_ts_file_path, mmap_mode="r"))
+
     @classmethod
-    def from_dir(cls, directory: Path) -> MemmapDataset:
-        """Reconstruct a MemmapDataset from a directory containing tensorized files.
+    def from_dir(cls, directory: Path) -> TensorizedDataset:
+        """Reconstruct a TensorizedDataset from a directory containing tensorized files.
 
         Raises:
             FileNotFoundError: If any of the expected array files are missing.
         """
-        expected = {cls._CONTEXT_FILE, cls._TARGET_FILE, cls._META_FILE}
-        missing = expected - {f.name for f in directory.iterdir()}
+        expected: set[str] = {
+            cls._CONTEXT_FILE,
+            cls._TARGET_FILE,
+            cls._UID_FILE,
+            cls._TARGET_TS_FILE,
+            cls._META_FILE,
+        }
+        missing: set[str] = expected - {f.name for f in directory.iterdir()}
         if missing:
             raise FileNotFoundError(f"Missing files in {directory}: {missing}")
+
         return cls(directory)
 
 
 @dataclass(frozen=True)
-class MemmapSplit:
-    """Container for tensorized train/val/test splits."""
+class TemporalSplit:
+    """Container for train, validation, and test datasets produced by a temporal split.
 
-    train: MemmapDataset
-    val: MemmapDataset
-    test: MemmapDataset
-    num_items: int  # Number of unique items (tracks) in the catalog
+    Each dataset is represented as a ParquetTableSet and shares a common item index
+    space defined separately by ItemIndex.
+    """
+
+    train: ParquetTableSet
+    val: ParquetTableSet
+    test: ParquetTableSet
+
+
+@dataclass(frozen=True)
+class TensorizedSplit:
+    """Container for tensorized train, validation, and test datasets."""
+
+    train: TensorizedDataset
+    val: TensorizedDataset
+    test: TensorizedDataset

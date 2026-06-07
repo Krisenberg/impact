@@ -6,7 +6,7 @@ import numpy as np
 import polars as pl
 import structlog
 
-from impact.schemas import MemmapDataset, ParquetDataset
+from impact.schemas import ParquetTableSet, TensorizedDataset
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -16,12 +16,12 @@ logger = structlog.stdlib.get_logger(__name__)
 
 
 def tensorize(
-    dataset: ParquetDataset,
+    dataset: ParquetTableSet,
     out_dir: Path,
     tracks_per_session: int,  # K
     context_sessions: int,  # L
     batch_size: int = 100_000,
-) -> MemmapDataset:
+) -> TensorizedDataset:
     """Convert fixed-size sequences of listening session into mem-mapped NumPy tensors.
 
     This function performs an offline tensorization step that transforms sequence
@@ -85,20 +85,31 @@ def tensorize(
     )
     logger.info(f"Inferred number of samples: {n_samples}")
 
-    mm_dataset = MemmapDataset(directory=out_dir)
+    tensorized_dataset = TensorizedDataset(directory=out_dir)
 
     context_mm = np.lib.format.open_memmap(
-        filename=mm_dataset.context_file_path,
+        filename=tensorized_dataset.context_file_path,
         mode="w+",
         dtype=np.uint32,
         shape=(n_samples, L, K),
     )
-
     target_mm = np.lib.format.open_memmap(
-        filename=mm_dataset.target_file_path,
+        filename=tensorized_dataset.target_file_path,
         mode="w+",
         dtype=np.uint32,
         shape=(n_samples, K),
+    )
+    uid_mm = np.lib.format.open_memmap(
+        filename=tensorized_dataset.uid_file_path,
+        mode="w+",
+        dtype=np.uint32,
+        shape=(n_samples,),
+    )
+    target_ts_mm = np.lib.format.open_memmap(
+        filename=tensorized_dataset.target_ts_file_path,
+        mode="w+",
+        dtype=np.uint32,
+        shape=(n_samples,),
     )
 
     logger.info("Tensorizing dataset using the underlying partitioned Parquet files...")
@@ -114,10 +125,16 @@ def tensorize(
 
             contexts = batch["context"].to_list()
             targets = batch["target"].to_list()
+            uids = batch["uid"].to_list()
+            target_ts = batch["target_ts"].to_list()
+
             context_mm[offset : (offset + n)] = [
                 [session["items"] for session in context] for context in contexts
             ]
             target_mm[offset : (offset + n)] = [target["items"] for target in targets]
+            uid_mm[offset : (offset + n)] = uids
+            target_ts_mm[offset : (offset + n)] = target_ts
+
             offset += n
 
     logger.info(
@@ -125,6 +142,11 @@ def tensorize(
     )
     context_mm.flush()
     target_mm.flush()
-    np.save(mm_dataset.meta_file_path, np.array([n_samples, L, K], dtype=np.int64))
+    uid_mm.flush()
+    target_ts_mm.flush()
+    np.save(
+        file=tensorized_dataset.meta_file_path,
+        arr=np.array([n_samples, L, K], dtype=np.int64),
+    )
 
-    return mm_dataset
+    return tensorized_dataset

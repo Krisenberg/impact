@@ -10,7 +10,7 @@ logger = structlog.stdlib.get_logger(__name__)
 
 def extract_sequences(
     sessions_lf: pl.LazyFrame,
-    context_sessions: int = 20,  # L
+    context_sessions: int = 20,
     step: int = 20,
     assign_index: bool = True,
 ) -> pl.LazyFrame:
@@ -76,7 +76,7 @@ def extract_sequences(
         .group_by(["uid", "session_id"])
         .agg([
             pl.col("item_id").alias("items"),
-            pl.col("timestamp").max().alias("session_ts"),
+            pl.col("timestamp").min().alias("session_ts"),
         ])
         .sort(["uid", "session_ts"])
 

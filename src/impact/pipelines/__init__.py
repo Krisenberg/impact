@@ -1,9 +1,9 @@
 from .data_pipeline import DataPipeline
-from .evaluation_pipeline import EvaluationPipeline
+from .impact_evaluation_pipeline import IMPACTEvaluationPipeline
 from .sasrec_training_pipeline import SASRecTrainingPipeline
 
 __all__ = [
     "DataPipeline",
-    "EvaluationPipeline",
+    "IMPACTEvaluationPipeline",
     "SASRecTrainingPipeline",
 ]

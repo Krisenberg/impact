@@ -19,14 +19,14 @@ def configure_logging(
     It catches both structlog logs and standard library logs (e.g., from PyTorch) and
     routes them through the same formatting pipeline.
 
-    The configuration is inspired by the structlog docs:
+    The configuration is inspired by this section of structlog docs:
     https://www.structlog.org/en/stable/performance.html
 
     Args:
         level: The minimum log level to display.
         log_file: Path to a human-readable log file (.log).
             If None (default), no such file will be created.
-        json_log_file: Path to a machine-readable JSON log file.
+        json_log_file: Path to a machine-readable NDJSON log file.
             If None (default), no such file will be created.
         details: If True, call site details (e.g., file name, line number) will be added
             to log messages.
