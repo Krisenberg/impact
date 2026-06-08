@@ -1,15 +1,22 @@
 """Module for creating plots that will be presented in the thesis."""
 
+import dataclasses
 import logging
 from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, cast
 
 import altair as alt
 import click
+import dotenv
+import numpy as np
 import polars as pl
 import structlog
 
+from impact.cli import inject_impact_config
+from impact.config import ImpactConfig
 from impact.logger import configure_logging
+from impact.pipelines import DataPipeline, IMPACTEvaluationPipeline
+from impact.utils import seed_everything
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -17,7 +24,7 @@ logger = structlog.stdlib.get_logger(__name__)
 class OkabeItoPalette(NamedTuple):
     """Okabe-Ito palette as a named tuple of hex color strings.
 
-    This color palette is colorblind-safe and prints well in greyscale. Encapsulating
+    This color palette is colorblind-safe and prints well in grayscale. Encapsulating
     it in a NamedTuple makes colors accessible by name rather than by index.
     """
 
@@ -38,8 +45,9 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 FONT: str = "Libertinus Serif"  # Match the serif font used in the thesis
 FONT_SIZE_BASE = 12  # Match the 12pt font used in the thesis
 FONT_SIZE_SMALL = 10
+FONT_SIZE_TINY = 8
 COLOR_INK = "#1A1A1A"  # Labels, ticks, axis domains
-COLOR_GRID = "#E0E0E0"  # Passive guides - gridlines, legend borders
+COLOR_GRID = "#E0E0E0"  # Passive guides - gridlines, legend borders, etc.
 OKABE_ITO_PALETTE = OkabeItoPalette(
     orange="#E69F00",
     sky_blue="#56B4E9",
@@ -54,7 +62,7 @@ OKABE_ITO_PALETTE = OkabeItoPalette(
 
 @alt.theme.register("thesis_theme", enable=True)
 def thesis_theme() -> alt.theme.ThemeConfig:
-    """Register and enable an Altair theme for publication-quality visualisations."""
+    """Register and enable an Altair theme for publication-quality visualizations."""
     return {
         "config": {
             # -- Canvas --
@@ -126,6 +134,356 @@ def thesis_theme() -> alt.theme.ThemeConfig:
 def cli() -> None:
     """CLI entrypoint for the functions defined in this module."""
     pass
+
+
+@cli.command(name="plot-alpha-curve")
+@click.option(
+    "--sasrec-checkpoint-path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to a trained SASRecNBR checkpoint that will be evaluated.",
+)
+@click.option(
+    "--log-level",
+    type=click.Choice(list(logging.getLevelNamesMapping()), case_sensitive=False),
+    default="WARNING",
+    show_default=True,
+    help="Logging verbosity level.",
+)
+@click.option(
+    "--lang",
+    type=click.Choice(["pl", "en"], case_sensitive=False),
+    default="pl",
+    show_default=True,
+    help="Language for axis labels and annotations.",
+)
+@click.option(
+    "--n-partitions",
+    type=int,
+    default=1,
+    show_default=True,
+    help="""
+        Number of partitions for sequential processing. Use >1 for large datasets that
+        exceed available RAM (data is partitioned by user, i.e. uid column).
+    """,
+)
+@click.option(
+    "--raw-data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="""
+        Base directory for raw data (the original, immutable data dump).
+        Defaults to <project_root>/data/raw.
+    """,
+)
+@click.option(
+    "--interim-data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="""
+        Base directory for interim data (intermediate data that has been transformed).
+        Defaults to <project_root>/data/interim.
+    """,
+)
+@click.option(
+    "--processed-data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=False,
+    help="""
+        Base directory for processed data (the final, canonical datasets for modeling).
+        Defaults to <project_root>/data/processed.
+    """,
+)
+@click.option(
+    "--alpha-start",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help="Lower bound of the alpha sweep range (inclusive).",
+)
+@click.option(
+    "--alpha-stop",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Upper bound of the alpha sweep range (inclusive).",
+)
+@click.option(
+    "--alpha-step",
+    type=float,
+    default=0.01,
+    show_default=True,
+    help="Step size between consecutive alpha values in the sweep.",
+)
+@click.option(
+    "--metrics-at-k",
+    type=int,
+    default=10,
+    show_default=True,
+    help="Cutoff level k for the metrics collected during the alpha sweep.",
+)
+@click.option(
+    "--out-dir",
+    "-o",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="""
+        Output directory for the generated plots.
+        Defaults to <project_root>/reports/plots/alpha-curve.
+    """,
+)
+@click.option(
+    "--format",
+    "-f",
+    "formats",
+    type=click.Choice(("svg", "pdf", "png"), case_sensitive=False),
+    multiple=True,
+    default=("svg", "pdf"),
+    show_default=True,
+    help="Output format(s). Can be specified multiple times: -f svg -f pdf.",
+)
+@click.option(
+    "--png-scale",
+    type=float,
+    default=3.0,
+    show_default=True,
+    help="Scale factor for PNG export. 3.0 is approx. 216 PPI - suitable for print.",
+)
+@inject_impact_config
+def plot_alpha_curve(
+    impact_config: ImpactConfig,
+    sasrec_checkpoint_path: Path,
+    log_level: str,
+    lang: str,
+    n_partitions: int,
+    raw_data_dir: Path | None = None,
+    interim_data_dir: Path | None = None,
+    processed_data_dir: Path | None = None,
+    alpha_start: float = 0.0,
+    alpha_stop: float = 1.0,
+    alpha_step: float = 0.01,
+    metrics_at_k: int = 10,
+    out_dir: Path | None = None,
+    formats: tuple[Literal["svg", "pdf", "png"], ...] = ("svg", "pdf"),
+    png_scale: float = 3.0,
+) -> None:
+    """Plot IMPACT evaluation metrics as a function of alpha.
+
+    Alpha controls the relative contribution of SASRec and ACT-R in the final
+    late-fusion score (trade-off).
+    """
+    raw_data_dir = raw_data_dir or PROJECT_ROOT / "data" / "raw"
+    interim_data_dir = interim_data_dir or PROJECT_ROOT / "data" / "interim"
+    processed_data_dir = processed_data_dir or PROJECT_ROOT / "data" / "processed"
+    out_dir = out_dir or PROJECT_ROOT / "reports" / "plots" / "alpha-curve"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Configure logging without piping logs to files
+    configure_logging(
+        level=logging.getLevelNamesMapping()[log_level],
+    )
+
+    # Load env configuration (e.g. HuggingFace API token)
+    logger.info("Attempting to load env variables from .env file")
+    _ = dotenv.load_dotenv()
+
+    # Set seed for reproducibility
+    seed_everything(impact_config.system.seed)
+
+    data_pipeline = DataPipeline(
+        raw_dir=raw_data_dir,
+        interim_dir=interim_data_dir,
+        processed_dir=processed_data_dir,
+        config=impact_config,
+    )
+
+    logger.info("Fetching raw events data...")
+    events_lf = data_pipeline.get_raw_events()
+
+    logger.info("Fetching train/val/test splits...")
+    splits, item_index = data_pipeline.get_splits(n_partitions=n_partitions)
+
+    logger.info("Tensorizing splits...")
+    tensorized_splits = data_pipeline.tensorize(splits)
+
+    alphas = np.round(
+        a=np.arange(alpha_start, alpha_stop + alpha_step / 2, alpha_step),
+        decimals=2,
+    )
+    results: list[dict[str, float]] = []
+
+    evaluation_pipeline = IMPACTEvaluationPipeline(impact_config, item_index, events_lf)
+    logger.info("Running IMPACT evaluation...")
+
+    metrics = evaluation_pipeline.evaluate(tensorized_splits, sasrec_checkpoint_path)
+    logger.info("IMPACT evaluation complete", **metrics)
+
+    for alpha in alphas:
+        eval_config = dataclasses.replace(
+            impact_config,
+            eval=dataclasses.replace(
+                impact_config.eval,
+                alpha=float(alpha),
+                k_cutoffs=(metrics_at_k,),
+            ),
+        )
+
+        pipeline = IMPACTEvaluationPipeline(eval_config, item_index, events_lf)
+        metrics: dict[str, float] = pipeline.evaluate(
+            split=tensorized_splits, sasrec_state_dict_path=sasrec_checkpoint_path
+        )
+
+        row = {"alpha": float(alpha), **metrics}
+        results.append(row)
+
+    # -- Labels per language --
+    labels: dict[str, dict[str, str]] = {
+        "en": {
+            "x_title": "α (0 = pure ACT-R, 1 = pure SASRec)",  # noqa: RUF001
+            "y_left_title": "NDCG@k (Overall & Repetition)",
+            "y_right_title": "NDCG@k (Exploration)",
+            "title": "Effect of α on IMPACT Metrics",  # noqa: RUF001
+            "ndcg_at_10": "NDCG@k (Overall)",
+            "ndcg_local_rep_at_10": "Local Repetition",
+            "ndcg_global_rep_at_10": "Global Repetition",
+            "ndcg_local_exp_at_10": "Local Exploration",
+            "ndcg_global_exp_at_10": "Global Exploration",
+        },
+        "pl": {
+            "x_title": "α (0 = wyłącznie ACT-R, 1 = wyłącznie SASRec)",  # noqa: RUF001
+            "y_left_title": "NDCG@k (ogólne i powtarzalność)",
+            "y_right_title": "NDCG@k (eksploracja)",
+            "title": "Wpływ parametru α na metryki IMPACT",  # noqa: RUF001
+            "ndcg_at_10": "NDCG@k (ogólne)",
+            "ndcg_local_rep_at_10": "Powtarzalność lokalna",
+            "ndcg_global_rep_at_10": "Powtarzalność globalna",
+            "ndcg_local_exp_at_10": "Eksploracja lokalna",
+            "ndcg_global_exp_at_10": "Eksploracja globalna",
+        },
+    }
+    lbl = labels[lang]
+
+    # -- Plot data --
+    df_plot = (
+        pl.DataFrame(results)
+        .unpivot(
+            on=[r for r in results[0] if r != "alpha"],
+            index="alpha",
+            variable_name="metric",
+            value_name="score",
+        )
+        .filter(pl.col("metric").str.contains("(?i)ndcg"))  # only NDCG
+        .with_columns(pl.col("metric").replace(labels[lang]))
+    )
+
+    # -- Subplots specification --
+    left_subplot_metrics_to_colors: dict[str, str] = {
+        lbl[metric]: color
+        for metric, color in {
+            "ndcg_at_10": OKABE_ITO_PALETTE.black,
+            "ndcg_local_rep_at_10": OKABE_ITO_PALETTE.blue,
+            "ndcg_global_rep_at_10": OKABE_ITO_PALETTE.vermillion,
+        }.items()
+    }
+    right_subplot_metrics_to_colors: dict[str, str] = {
+        lbl[metric]: color
+        for metric, color in {
+            "ndcg_local_exp_at_10": OKABE_ITO_PALETTE.orange,
+            "ndcg_global_exp_at_10": OKABE_ITO_PALETTE.bluish_green,
+        }.items()
+    }
+
+    # -- Shared x-axis --
+    base_x = alt.X(
+        "alpha:Q",
+        title=lbl["x_title"],
+        scale=alt.Scale(domain=[alpha_start, alpha_stop]),
+        axis=alt.Axis(tickCount=5, grid=False),
+    )
+
+    def _create_subplot(
+        subplot_df: pl.DataFrame,
+        y_title: str,
+        colors: list[str],
+        domain: list[str],
+    ) -> alt.LayerChart:
+        base = alt.Chart(subplot_df)
+
+        lines = base.mark_line().encode(
+            x=base_x,
+            y=alt.Y("score:Q", title=y_title, scale=alt.Scale(zero=False)),
+            color=alt.Color(
+                "metric:N",
+                scale=alt.Scale(domain=domain, range=colors),
+                legend=alt.Legend(title=None),
+            ),
+            tooltip=["alpha:Q", "metric:N", alt.Tooltip("score:Q", format=".4f")],
+        )
+
+        points = base.mark_point(filled=True).encode(
+            x=base_x,
+            y=alt.Y("score:Q"),
+            color=alt.Color("metric:N"),
+        )
+
+        text_labels = (
+            base.mark_text(
+                align="left",
+                baseline="middle",
+                dx=6,  # offset to the right
+                dy=-6,  # offset up
+                fontSize=FONT_SIZE_TINY,
+                opacity=0.6,
+            )
+            .encode(
+                x=base_x,
+                y=alt.Y("score:Q"),
+                text=alt.Text("score:Q", format=".4f"),
+                color=alt.Color("metric:N"),
+            )
+            .transform_filter(
+                " || ".join([f"datum.alpha == {a}" for a in [0.0, 0.5, 1.0]])
+            )
+        )
+
+        return cast(alt.LayerChart, alt.layer(lines, points, text_labels))
+
+    # -- Left subplot --
+    left_subplot = _create_subplot(
+        subplot_df=(
+            df_plot.filter(
+                pl.col("metric").is_in(left_subplot_metrics_to_colors.keys())
+            )
+        ),
+        y_title=lbl["y_left_title"],
+        colors=list(left_subplot_metrics_to_colors.values()),
+        domain=list(left_subplot_metrics_to_colors.keys()),
+    )
+
+    # -- Right subplot --
+    right_subplot = _create_subplot(
+        subplot_df=(
+            df_plot.filter(
+                pl.col("metric").is_in(right_subplot_metrics_to_colors.keys())
+            )
+        ),
+        y_title=lbl["y_right_title"],
+        colors=list(right_subplot_metrics_to_colors.values()),
+        domain=list(right_subplot_metrics_to_colors.keys()),
+    )
+
+    # -- Final chart (horizontal concat) --
+    chart = (
+        (left_subplot | right_subplot)
+        .resolve_scale(color="independent")
+        .properties(title=lbl["title"])
+    )
+
+    for fmt in formats:
+        kwargs: dict[str, Any] = {"scale_factor": png_scale} if fmt == "png" else {}
+        path = out_dir / f"{impact_config.display_id}.{fmt}"
+        chart.save(path, **kwargs)
+        click.echo(f"Saved chart in {fmt.upper()} format to {path}")
 
 
 @cli.command(name="sasrec-training")
