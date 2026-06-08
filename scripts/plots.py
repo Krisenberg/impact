@@ -1,6 +1,7 @@
 """Module for creating plots that will be presented in the thesis."""
 
 import dataclasses
+import datetime
 import logging
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast
@@ -233,6 +234,21 @@ def cli() -> None:
     """,
 )
 @click.option(
+    "--out-filename",
+    type=str,
+    default=None,
+    help="""
+        Base filename (without extension) for the saved plots.
+        Defaults to a UTC timestamp: alpha-curve_YYYY-MM-DD_HH-MM-SS.
+    """,
+)
+@click.option(
+    "--no-title",
+    is_flag=True,
+    default=False,
+    help="Suppress the chart title (e.g. when the figure will be captioned in LaTeX).",
+)
+@click.option(
     "--format",
     "-f",
     "formats",
@@ -264,6 +280,8 @@ def plot_alpha_curve(
     alpha_step: float = 0.01,
     metrics_at_k: int = 10,
     out_dir: Path | None = None,
+    out_filename: str | None = None,
+    no_title: bool = False,
     formats: tuple[Literal["svg", "pdf", "png"], ...] = ("svg", "pdf"),
     png_scale: float = 3.0,
 ) -> None:
@@ -277,6 +295,11 @@ def plot_alpha_curve(
     processed_data_dir = processed_data_dir or PROJECT_ROOT / "data" / "processed"
     out_dir = out_dir or PROJECT_ROOT / "reports" / "plots" / "alpha-curve"
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.datetime.now(datetime.UTC)
+    out_filename = (
+        out_filename or f"alpha-curve_{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}"
+    )
 
     # Configure logging without piping logs to files
     configure_logging(
@@ -476,12 +499,12 @@ def plot_alpha_curve(
     chart = (
         (left_subplot | right_subplot)
         .resolve_scale(color="independent")
-        .properties(title=lbl["title"])
+        .properties(title=lbl["title"] if not no_title else None)
     )
 
     for fmt in formats:
         kwargs: dict[str, Any] = {"scale_factor": png_scale} if fmt == "png" else {}
-        path = out_dir / f"{impact_config.display_id}.{fmt}"
+        path = out_dir / f"{out_filename}.{fmt}"
         chart.save(path, **kwargs)
         click.echo(f"Saved chart in {fmt.upper()} format to {path}")
 
