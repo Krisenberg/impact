@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 import structlog
 import torch
+from tqdm import tqdm
 
 if TYPE_CHECKING:
     from impact.schemas import ItemIndex
@@ -40,39 +41,32 @@ class ACTRHistoryIndex:
                 training split.
         """
         logger.info(
-            "Filtering, mapping, and indexing raw event history for eval users...",
+            "Filtering and mapping (item ID -> index) event history for eval users...",
             num_eval_users=len(eval_uids),
         )
 
-        # Filter and map item_id -> idx
-        eval_history_df = (
-            events_lf.filter(
-                pl.col("event_type") == "listen",
-                pl.col("uid").is_in(eval_uids),
-            )
-            .join(item_index.table.lf, on="item_id", how="inner")
-            .select(["uid", "idx", "timestamp", "is_organic"])
-            .collect()
-        )
-        # TODO: remove / add logging
-        logger.warning(
-            f"eval_history_df size: {eval_history_df.estimated_size() / 1024**2:.2f} MB"
-        )
-        # if len(eval_uids) > 50_000:
-        #     msg = (
-        #         "Large eval_uids set passed to ACTRHistoryIndex, "
-        #         "ensure this is intentional to avoid RAM exhaustion."
-        #     )
-        #     logger.warning(msg, num_eval_users=len(eval_uids))
-
         # Build a dictionary of NumPy arrays for O(1) lookups
         self._history: dict[int, dict[str, np.ndarray]] = {}
-        for uid, df in eval_history_df.partition_by("uid", as_dict=True).items():
+        for uid, df in tqdm(
+            iterable=(
+                events_lf.filter(
+                    pl.col("event_type") == "listen",
+                    pl.col("uid").is_in(eval_uids),
+                )
+                .join(item_index.table.lf, on="item_id", how="inner")
+                .select(["uid", "idx", "timestamp", "is_organic"])
+                .collect()
+                .partition_by("uid", as_dict=True)
+                .items()
+            ),
+            desc="Indexing eval users history",
+            leave=False,
+        ):
             df = df.sort("timestamp")
             self._history[uid[0]] = {
-                "item_ids": df["idx"].to_numpy(),
-                "timestamps": df["timestamp"].to_numpy(),
-                "is_organic": df["is_organic"].to_numpy(),
+                "item_ids": df["idx"].to_numpy().copy(),
+                "timestamps": df["timestamp"].to_numpy().copy(),
+                "is_organic": df["is_organic"].to_numpy().copy(),
             }
 
         logger.info("ACT-R History indexing complete", indexed_users=len(self._history))
