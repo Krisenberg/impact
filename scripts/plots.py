@@ -335,12 +335,6 @@ def plot_alpha_curve(
     )
     results: list[dict[str, float]] = []
 
-    evaluation_pipeline = IMPACTEvaluationPipeline(impact_config, item_index, events_lf)
-    logger.info("Running IMPACT evaluation...")
-
-    metrics = evaluation_pipeline.evaluate(tensorized_splits, sasrec_checkpoint_path)
-    logger.info("IMPACT evaluation complete", **metrics)
-
     for alpha in alphas:
         eval_config = dataclasses.replace(
             impact_config,
