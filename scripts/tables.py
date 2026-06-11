@@ -37,14 +37,14 @@ def cli() -> None:
 @click.option(
     "--lang",
     type=click.Choice(["pl", "en"], case_sensitive=False),
-    default="pl",
+    default="en",
     help="Language for the table headers and textual content (pl or en).",
 )
 @click.option(
     "--out-dir",
     "-o",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
         Output directory for the LaTeX code and corresponding PipelineConfig YAML dumps.
         Defaults to project root / 'reports' / 'tables' / 'data-funnel-stats'.
@@ -53,7 +53,7 @@ def cli() -> None:
 @click.option(
     "--raw-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
         Root directory for raw data (the original, immutable data dump).
         Defaults to project root / 'data' / 'raw'.
@@ -62,7 +62,7 @@ def cli() -> None:
 @click.option(
     "--interim-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
         Root directory for interim data (intermediate data that has been transformed).
         Defaults to project root / 'data' / 'interim'.
@@ -71,7 +71,7 @@ def cli() -> None:
 @click.option(
     "--processed-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
         Root directory for processed data (the final, canonical datasets for modeling).
         Defaults to project root / 'data' / 'processed'.
@@ -80,8 +80,8 @@ def cli() -> None:
 @inject_impact_config
 def generate_data_funnel_stats_table(
     impact_config: ImpactConfig,
-    log_level: str,
-    lang: str = "pl",
+    log_level: str = "INFO",
+    lang: str = "en",
     out_dir: Path | None = None,
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
@@ -134,20 +134,17 @@ def generate_data_funnel_stats_table(
 
     class _VariantConfig(NamedTuple):
         step: int
-        n_partitions: int
         dataset_name: str  # Name of the dataset for the "reporting" (in the thesis)
         marker: str  # Marker for the footnotes
 
     variants: dict[DatasetSize, _VariantConfig] = {
         DatasetSize.SIZE_50M: _VariantConfig(
             step=5,
-            n_partitions=1,
             dataset_name="Yambda-50M",
             marker="a",
         ),
         DatasetSize.SIZE_5B: _VariantConfig(
             step=20,
-            n_partitions=32,
             dataset_name="Yambda-5B",
             marker="b",
         ),
@@ -166,12 +163,13 @@ def generate_data_funnel_stats_table(
         pipeline.config = variant_config  # Switch pipeline config
 
         events_lf = pipeline.get_raw_events()
-        sessions_lf = pipeline.get_sessions(n_partitions=variant.n_partitions)
-        sequences_lf = pipeline.get_sequences(n_partitions=variant.n_partitions)
+        sessions_lf = pipeline.get_sessions()
+        sequences_lf = pipeline.get_sequences()
 
         tnote = f"\\tnote{{\\hyperlink{{note:{variant.marker}}}{{{variant.marker}}}}}"
         rows.append({
             "dataset": f"{variant.dataset_name}{tnote}",
+            # TODO: report also the number of valid listening events
             "raw": _format_num(events_lf.select(pl.len()).collect().item()),
             "sessionized": _format_num(sessions_lf.select(pl.len()).collect().item()),
             "sequenced": _format_num(sequences_lf.select(pl.len()).collect().item()),

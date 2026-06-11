@@ -39,20 +39,11 @@ class DatasetConfig:
 class SessionConfig:
     """Configuration for the sessionization stage (Algorithm 1 in the thesis)."""
 
-    inactivity_gap_seconds: int = 1200
-    """Number of seconds of inactivity before a session is considered finished."""
-
     tracks_per_session: int = 10
     """Number of tracks that constitute a session. Denoted as K in the thesis.
 
     Sessions with less than K tracks are discarded. Sessions with more than K tracks
     are truncated.
-    """
-
-    min_listen_seconds: int = 30
-    """Minimum playback duration (in seconds) to consider an event as a valid listen.
-
-    Defaults to 30 (industry standard used by authors of other publications).
     """
 
 
@@ -241,9 +232,7 @@ class ImpactConfig:
         """Cache key for the sessionization stage (Algorithm 1 in the thesis)."""
         parts = [
             "sessions",
-            f"gap{self.session.inactivity_gap_seconds}",
             f"k{self.session.tracks_per_session}",
-            f"min{self.session.min_listen_seconds}",
         ]
         return "_".join(parts)
 

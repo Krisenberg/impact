@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import math
+import os
+import random
 from typing import cast
 
+import numpy as np
 import polars as pl
+import psutil
 import structlog
+import torch
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -16,19 +22,13 @@ def seed_everything(seed: int) -> None:
     Sets seeds for Python's random, NumPy, and PyTorch (CPU, CUDA, MPS) modules.
     Also disables cuDNN benchmark mode and enables deterministic operations.
     Should be called once at the top-level entry point before any data loading or model
-    initialisation.
+    initialization.
 
     Inspired by: https://gist.github.com/ihoromi4/b681a9088f348942b01711f251e5f964
 
     Args:
         seed: Global random seed.
     """
-    import os
-    import random
-
-    import numpy as np
-    import torch
-
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
@@ -47,16 +47,11 @@ def seed_worker(_: int) -> None:  # Ignore the argument (worker_id)
     The per-worker seed is derived from PyTorch's initial worker seed, ensuring workers
     are both independent and deterministic given the same global seed.
 
-    Pass this function as `worker_init_fn` to DataLoader.
+    Pass this function as `worker_init_fn` to PyTorch's DataLoader.
 
     Args:
         worker_id: Worker index provided automatically by DataLoader.
     """
-    import random
-
-    import numpy as np
-    import torch
-
     worker_seed = torch.initial_seed() % WORKER_SEED_MODULUS
     np.random.seed(worker_seed)
     random.seed(worker_seed)
@@ -76,17 +71,12 @@ def estimate_processing_partitions(
         data: Dataset to be processed. For LazyFrames, size is estimated by sampling
             the first 1000 rows.
         target_ram_fraction: Fraction of currently available RAM to target per
-            partition. It should be keept low (<=0.2) to account for memory spikes
+            partition. It should be kept low (<=0.2) to account for memory spikes
             during joins, explodes, and struct operations.
 
     Returns:
         Number of partitions in range [1, 64].
     """
-    import math
-    from typing import cast
-
-    import psutil
-
     estimated_size = _estimate_size_bytes(data)
     available_ram = cast(int, psutil.virtual_memory().available)  # type: ignore[redundant-cast]
     usable_ram = available_ram * target_ram_fraction
@@ -114,8 +104,6 @@ def estimate_storage_partitions(
     `target_file_size_mb` in uncompressed size. Actual files will be smaller due to
     Parquet compression.
 
-    Dataset partitioning can be especially useful for torch dataloaders or numpy memmap.
-
     Args:
         data: Dataset to be written as partitioned Parquet files. For LazyFrames, size
             is estimated by sampling the first 1000 rows.
@@ -125,8 +113,6 @@ def estimate_storage_partitions(
     Returns:
         Number of partitions in range [1, max_partitions].
     """
-    import math
-
     estimated_size = _estimate_size_bytes(data)
     target_bytes = target_file_size_mb * 1024**2
     partitions = max(1, min(max_partitions, math.ceil(estimated_size / target_bytes)))

@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     import polars as pl
 
     from impact.config import ImpactConfig
-    from impact.schemas import ItemIndex, TensorizedSplit
+    from impact.schemas import ItemIndex, TensorizedDataset
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -63,7 +63,7 @@ class _TargetSplits:
 
 
 @final
-class IMPACTEvaluationPipeline:
+class ImpactEvaluationPipeline:
     """Late-fusion evaluation pipeline for the IMPACT framework.
 
     Combines a trained SASRecNBR model with a deterministic ACT-R scorer via a weighted
@@ -86,7 +86,7 @@ class IMPACTEvaluationPipeline:
         self,
         config: ImpactConfig,
         item_index: ItemIndex,
-        events_lf: pl.LazyFrame,
+        listens_lf: pl.LazyFrame,
     ) -> None:
         """Initialize the IMPACT Framework evaluation pipeline.
 
@@ -94,20 +94,20 @@ class IMPACTEvaluationPipeline:
             config: Complete IMPACT Framework configuration.
             item_index: Train-derived index mapping raw item (track) IDs to contiguous
                 1-based indices.
-            events_lf: LazyFrame of all interaction events; used to build the ACT-R
-                history index.
+            listens_lf: LazyFrame of valid listen events, contains the listening history
+                for all users. Used to build the ACT-R history index.
         """
         self._config = config
         self._item_index = item_index
-        self._events_lf = events_lf
+        self._listens_lf = listens_lf
 
     @torch.no_grad()
     def evaluate(
         self,
-        split: TensorizedSplit,
+        split_partition: TensorizedDataset,
         sasrec_state_dict_path: Path,
     ) -> dict[str, float]:
-        """Evaluate the IMPACT model on the held-out test split.
+        """Evaluate the IMPACT model on the given split partition.
 
         Loads the SASRecNBR checkpoint, builds the ACT-R history index for test users,
         and runs batched inference over the full item catalog. Final scores are
@@ -124,8 +124,9 @@ class IMPACTEvaluationPipeline:
         and `k` is the cutoff. Examples: ndcg_at_5, recall_global_exp_at_10.
 
         Args:
-            split: Tensorized train/val/test temporal splits; only the test partition
-                is used here.
+            split_partition: A single tensorized partition to evaluate on. Pass
+                `TensorizedSplit.val` during hyperparameter search and
+                `TensorizedSplit.test` for final evaluation on the held-out data.
             sasrec_state_dict_path: Path to the saved SASRecNBR checkpoint.
 
         Returns:
@@ -139,8 +140,8 @@ class IMPACTEvaluationPipeline:
         sasrec = self._load_sasrec(sasrec_state_dict_path, device)
 
         actr_history_index = ACTRHistoryIndex(
-            events_lf=self._events_lf,
-            eval_uids=np.unique(split.test.uid).tolist(),
+            listens_lf=self._listens_lf,
+            eval_uids=np.unique(split_partition.uid).tolist(),
             item_index=self._item_index,
         )
         actr = ACTR(
@@ -161,7 +162,7 @@ class IMPACTEvaluationPipeline:
         total_counts: dict[str, int] = dict.fromkeys(get_args(EvalScopeKey), 0)
 
         test_loader = DataLoader[EvalSequenceSample](
-            dataset=EvalSequenceDataset(split.test),
+            dataset=EvalSequenceDataset(split_partition),
             batch_size=self._config.eval.batch_size,
             shuffle=False,
             collate_fn=get_eval_collate_fn(),  # No negative sampling

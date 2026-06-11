@@ -58,15 +58,6 @@ def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
             """,
         ),
         click.option(
-            "--session-inactivity-gap-seconds",
-            type=int,
-            default=1200,
-            show_default=True,
-            help="""
-                Number of seconds of inactivity before a session is considered finished.
-            """,
-        ),
-        click.option(
             "--session-tracks-per-session",
             type=int,
             default=10,
@@ -75,17 +66,6 @@ def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
                 Number of tracks that constitute a session. Denoted as K in the thesis.
                 Sessions with less than K tracks are discarded. Sessions with more than
                 K tracks are truncated.
-            """,
-        ),
-        click.option(
-            "--session-min-listen-seconds",
-            type=int,
-            default=30,
-            show_default=True,
-            help="""
-                Minimum playback duration (in seconds) to consider an event as a valid
-                listen. Defaults to 30 (industry standard used by authors of other
-                publications).
             """,
         ),
         click.option(
