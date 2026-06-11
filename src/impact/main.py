@@ -6,7 +6,7 @@ import itertools
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import click
 import dotenv
@@ -17,9 +17,10 @@ from impact.dataset import DatasetSize
 from impact.logger import configure_logging
 from impact.pipelines import (
     DataPipeline,
-    IMPACTEvaluationPipeline,
+    ImpactEvaluationPipeline,
     SASRecTrainingPipeline,
 )
+from impact.schemas import TensorizedDataset
 from impact.utils import seed_everything
 
 if TYPE_CHECKING:
@@ -47,16 +48,6 @@ def cli() -> None:
     help="Logging verbosity level.",
 )
 @click.option(
-    "--n-partitions",
-    type=int,
-    default=1,
-    show_default=True,
-    help="""
-        Number of partitions for sequential processing. Use >1 for large datasets that
-        exceed available RAM (data is partitioned by user, i.e. uid column).
-    """,
-)
-@click.option(
     "--raw-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
@@ -77,7 +68,7 @@ def cli() -> None:
 @click.option(
     "--processed-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
         Base directory for processed data (the final, canonical datasets for modeling).
         Defaults to <project_root>/data/processed.
@@ -86,13 +77,13 @@ def cli() -> None:
 @click.option(
     "--base-logs-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="Base directory for log files. Defaults to <project_root>/logs.",
 )
 @click.option(
     "--models-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
         Base directory where a serialized checkpoint of the trained SASRecNBR model
         will be saved. Defaults to <project_root>/models.
@@ -101,8 +92,7 @@ def cli() -> None:
 @inject_impact_config
 def train_sasrec(
     impact_config: ImpactConfig,
-    log_level: str,
-    n_partitions: int,
+    log_level: str = "INFO",
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
     processed_data_dir: Path | None = None,
@@ -155,7 +145,7 @@ def train_sasrec(
     )
 
     logger.info("Fetching train/val/test splits...")
-    splits, item_index = data_pipeline.get_splits(n_partitions=n_partitions)
+    splits, item_index = data_pipeline.get_splits()
 
     logger.info("Tensorizing splits...")
     tensorized_splits = data_pipeline.tensorize(splits)
@@ -184,9 +174,19 @@ def train_sasrec(
 @cli.command(name="evaluate-impact")
 @click.option(
     "--sasrec-checkpoint-path",
-    type=click.Path(dir_okay=False, path_type=Path),
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
     required=True,
     help="Path to a trained SASRecNBR checkpoint that will be evaluated.",
+)
+@click.option(
+    "--partition",
+    type=click.Choice(["val", "test"], case_sensitive=False),
+    default="test",
+    show_default=True,
+    help="""
+        Dataset partition to evaluate on. Use 'val' during hyperparameter search,
+        'test' for final evaluation on the held-out data.
+    """,
 )
 @click.option(
     "--log-level",
@@ -194,16 +194,6 @@ def train_sasrec(
     default="INFO",
     show_default=True,
     help="Logging verbosity level.",
-)
-@click.option(
-    "--n-partitions",
-    type=int,
-    default=1,
-    show_default=True,
-    help="""
-        Number of partitions for sequential processing. Use >1 for large datasets that
-        exceed available RAM (data is partitioned by user, i.e. uid column).
-    """,
 )
 @click.option(
     "--raw-data-dir",
@@ -226,7 +216,7 @@ def train_sasrec(
 @click.option(
     "--processed-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
         Base directory for processed data (the final, canonical datasets for modeling).
         Defaults to <project_root>/data/processed.
@@ -235,33 +225,28 @@ def train_sasrec(
 @click.option(
     "--base-logs-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="Base directory for log files. Defaults to <project_root>/logs.",
 )
 @inject_impact_config
 def evaluate_impact(
     impact_config: ImpactConfig,
     sasrec_checkpoint_path: Path,
-    log_level: str,
-    n_partitions: int,
+    partition: str = "test",
+    log_level: str = "INFO",
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
     processed_data_dir: Path | None = None,
     base_logs_dir: Path | None = None,
     exec_time: datetime.datetime | None = None,
 ) -> None:
-    """Run IMPACT late-fusion evaluation on the held-out test split.
+    """Run IMPACT late-fusion evaluation on the specified split.
 
     Loads a trained SASRecNBR checkpoint, builds the ACT-R history index for test users,
     runs batched inference, and computes sample-weighted metrics at all configured
     cutoff levels: global, repetition-focused, and exploration-focused NDCG@K and
     Recall@K.
     """
-    if not sasrec_checkpoint_path.exists():
-        raise FileNotFoundError(
-            f"SASRecNBR checkpoint not found: {sasrec_checkpoint_path.as_posix()}"
-        )
-
     timestamp = exec_time or datetime.datetime.now(datetime.UTC)
 
     raw_data_dir = raw_data_dir or PROJECT_ROOT / "data" / "raw"
@@ -299,19 +284,24 @@ def evaluate_impact(
         config=impact_config,
     )
 
-    logger.info("Fetching raw events...")
-    events_lf = data_pipeline.get_raw_events()
+    logger.info("Fetching listen events...")
+    listens_lf = data_pipeline.get_listen_events()
 
     logger.info("Fetching train/val/test splits...")
-    splits, item_index = data_pipeline.get_splits(n_partitions=n_partitions)
+    splits, item_index = data_pipeline.get_splits()
 
     logger.info("Tensorizing splits...")
     tensorized_splits = data_pipeline.tensorize(splits)
 
-    evaluation_pipeline = IMPACTEvaluationPipeline(impact_config, item_index, events_lf)
+    evaluation_pipeline = ImpactEvaluationPipeline(
+        config=impact_config,
+        item_index=item_index,
+        listens_lf=listens_lf,
+    )
     logger.info("Running IMPACT evaluation...")
 
-    metrics = evaluation_pipeline.evaluate(tensorized_splits, sasrec_checkpoint_path)
+    split_partition = cast(TensorizedDataset, getattr(tensorized_splits, partition))
+    metrics = evaluation_pipeline.evaluate(split_partition, sasrec_checkpoint_path)
     logger.info("IMPACT evaluation complete", **metrics)
 
 
@@ -322,16 +312,6 @@ def evaluate_impact(
     default="INFO",
     show_default=True,
     help="Logging verbosity level.",
-)
-@click.option(
-    "--n-partitions",
-    type=int,
-    default=1,
-    show_default=True,
-    help="""
-        Number of partitions for sequential processing. Use >1 for large datasets that
-        exceed available RAM (data is partitioned by user, i.e. uid column).
-    """,
 )
 @click.option(
     "--raw-data-dir",
@@ -354,7 +334,7 @@ def evaluate_impact(
 @click.option(
     "--processed-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
         Base directory for processed data (the final, canonical datasets for modeling).
         Defaults to <project_root>/data/processed.
@@ -363,13 +343,13 @@ def evaluate_impact(
 @click.option(
     "--base-logs-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="Base directory for log files. Defaults to <project_root>/logs.",
 )
 @click.option(
     "--models-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
         Base directory where the grid search artifacts will be saved:
         the best-performing SASRecNBR model checkpoint, optimal ImpactConfig snapshot,
@@ -379,8 +359,7 @@ def evaluate_impact(
 @inject_impact_config
 def grid_search(
     impact_config: ImpactConfig,
-    log_level: str,
-    n_partitions: int,
+    log_level: str = "INFO",
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
     processed_data_dir: Path | None = None,
@@ -434,7 +413,7 @@ def grid_search(
     )
 
     logger.info("Fetching train/val/test splits...")
-    splits, item_index = data_pipeline.get_splits(n_partitions=n_partitions)
+    splits, item_index = data_pipeline.get_splits()
 
     logger.info("Tensorizing splits...")
     tensorized_splits = data_pipeline.tensorize(splits)

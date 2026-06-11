@@ -16,7 +16,7 @@ import structlog
 from impact.cli import inject_impact_config
 from impact.config import ImpactConfig
 from impact.logger import configure_logging
-from impact.pipelines import DataPipeline, IMPACTEvaluationPipeline
+from impact.pipelines import DataPipeline, ImpactEvaluationPipeline
 from impact.utils import seed_everything
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -154,19 +154,9 @@ def cli() -> None:
 @click.option(
     "--lang",
     type=click.Choice(["pl", "en"], case_sensitive=False),
-    default="pl",
+    default="en",
     show_default=True,
     help="Language for axis labels and annotations.",
-)
-@click.option(
-    "--n-partitions",
-    type=int,
-    default=1,
-    show_default=True,
-    help="""
-        Number of partitions for sequential processing. Use >1 for large datasets that
-        exceed available RAM (data is partitioned by user, i.e. uid column).
-    """,
 )
 @click.option(
     "--raw-data-dir",
@@ -189,7 +179,7 @@ def cli() -> None:
 @click.option(
     "--processed-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    required=False,
+    default=None,
     help="""
         Base directory for processed data (the final, canonical datasets for modeling).
         Defaults to <project_root>/data/processed.
@@ -269,9 +259,8 @@ def cli() -> None:
 def plot_alpha_curve(
     impact_config: ImpactConfig,
     sasrec_checkpoint_path: Path,
-    log_level: str,
-    lang: str,
-    n_partitions: int,
+    log_level: str = "WARNING",
+    lang: str = "en",
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
     processed_data_dir: Path | None = None,
@@ -320,11 +309,11 @@ def plot_alpha_curve(
         config=impact_config,
     )
 
-    logger.info("Fetching raw events data...")
-    events_lf = data_pipeline.get_raw_events()
+    logger.info("Fetching listening events data...")
+    listens_lf = data_pipeline.get_listen_events()
 
     logger.info("Fetching train/val/test splits...")
-    splits, item_index = data_pipeline.get_splits(n_partitions=n_partitions)
+    splits, item_index = data_pipeline.get_splits()
 
     logger.info("Tensorizing splits...")
     tensorized_splits = data_pipeline.tensorize(splits)
@@ -346,7 +335,7 @@ def plot_alpha_curve(
         )
 
         logger.info(f"Running IMPACT evaluation for {alpha=}...")
-        eval_pipeline = IMPACTEvaluationPipeline(eval_config, item_index, events_lf)
+        eval_pipeline = ImpactEvaluationPipeline(eval_config, item_index, listens_lf)
         metrics: dict[str, float] = eval_pipeline.evaluate(
             split_partition=tensorized_splits.val,
             sasrec_state_dict_path=sasrec_checkpoint_path,
@@ -521,7 +510,7 @@ def plot_alpha_curve(
 @click.option(
     "--lang",
     type=click.Choice(["pl", "en"], case_sensitive=False),
-    default="pl",
+    default="en",
     show_default=True,
     help="Language for axis labels and annotations.",
 )
@@ -539,9 +528,9 @@ def plot_alpha_curve(
     "--format",
     "-f",
     "formats",
-    type=click.Choice(["svg", "pdf", "png"], case_sensitive=False),
+    type=click.Choice(("svg", "pdf", "png"), case_sensitive=False),
     multiple=True,
-    default=["svg", "pdf"],
+    default=("svg", "pdf"),
     show_default=True,
     help="Output format(s). Can be specified multiple times: -f svg -f pdf.",
 )
@@ -554,11 +543,11 @@ def plot_alpha_curve(
 )
 def plot_sasrec_training(
     log_file_path: Path,
-    log_level: str,
-    lang: str,
-    out_dir: Path | None,
-    formats: list[Literal["svg", "pdf", "png"]],
-    png_scale: float,
+    log_level: str = "INFO",
+    lang: str = "en",
+    out_dir: Path | None = None,
+    formats: tuple[Literal["svg", "pdf", "png"], ...] = ("svg", "pdf"),
+    png_scale: float = 3.0,
 ) -> None:
     """Plot SASRec training curves from a structured NDJSON log file.
 
