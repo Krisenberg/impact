@@ -6,7 +6,14 @@ import structlog
 from tqdm import tqdm
 
 from impact.config import ImpactConfig
-from impact.features import filter_listen_events
+from impact.dataset import YambdaFetcher
+from impact.features import (
+    extract_sequences,
+    filter_listen_events,
+    sessionize,
+    split,
+    tensorize,
+)
 from impact.schemas import (
     ItemIndex,
     ParquetTableSet,
@@ -14,6 +21,7 @@ from impact.schemas import (
     TensorizedDataset,
     TensorizedSplit,
 )
+from impact.utils import estimate_processing_partitions
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -21,10 +29,18 @@ logger = structlog.stdlib.get_logger(__name__)
 class DataPipeline:
     """Orchestrates IMPACT data processing with a cache-aware API.
 
-    This pipeline manages the dataset acquisition and transformation of raw events into
-    ML-ready temporal splits. It ensures reproducibility and avoids redundant
-    computations by caching intermediate results in nested directories based on the
-    pipeline configuration.
+    Manages dataset acquisition and transformation of raw events into ML-ready tensors.
+    Intermediate results are cached in nested directories keyed by IMPACT Framework
+    configuration, ensuring reproducibility and avoiding redundant computation across
+    runs.
+
+    Processing stages in order:
+    1. `get_raw_events()`    - fetch and cache raw Yambda events (multi-event type).
+    2. `get_listen_events()` - filter to valid listen events only.
+    3. `get_sessions()`      - extract user-scoped listening sessions.
+    4. `get_sequences()`     - build context/target sequence pairs.
+    5. `get_splits()`        - apply temporal train/val/test split.
+    6. `tensorize()`         - convert to memory-mapped NumPy arrays.
     """
 
     def __init__(
@@ -50,9 +66,15 @@ class DataPipeline:
         self.config: ImpactConfig = config
 
     def get_raw_events(self) -> pl.LazyFrame:
-        """Fetch raw interactions."""
-        from impact.dataset import YambdaFetcher
+        """Get raw interaction events, downloading and caching if not already cached.
 
+        Caching is handled by the Hugging Face Hub client, which persists the dataset
+        under `<raw_dir>` and skips downloading on subsequent calls.
+
+        Returns:
+            A LazyFrame of raw interaction events of all types, scanned lazily from the
+            cached arquet files.
+        """
         fetcher = YambdaFetcher(
             cache_dir=self.raw_dir,
             dataset_type=self.config.dataset.format,
@@ -69,26 +91,28 @@ class DataPipeline:
 
         Returns:
             A LazyFrame of valid listen events with an `actual_played_seconds` column
-            added. Scanned lazily from the cached Parquet file.
+            added. Scanned lazily from the cached parquet file.
         """
         cache_dir = self.interim_dir / self.config.dataset_id / "listen_events"
         success_marker = cache_dir / "_SUCCESS"
 
+        # Atomicity check
         if not success_marker.exists():
-            logger.info("No cached listen events found, computing...")
+            # Clean up potentially corrupted partial runs
             if cache_dir.exists():
                 shutil.rmtree(cache_dir)
             cache_dir.mkdir(parents=True)
+
+            logger.info("No complete cached listen events found, computing...")
 
             with tqdm(
                 desc="Computing listen events",
                 unit="",
                 bar_format="{desc}: {elapsed} {postfix}",
             ) as bar:
-                filter_listen_events(
-                    events_lf=self.get_raw_events(),
-                    min_listen_seconds=self.config.session.min_listen_seconds,
-                ).sink_parquet(cache_dir / "listen_events.parquet")
+                filter_listen_events(events_lf=self.get_raw_events()).sink_parquet(
+                    path=cache_dir / "listen_events.parquet",
+                )
                 bar.set_postfix_str("done")
 
             success_marker.touch()
@@ -96,154 +120,150 @@ class DataPipeline:
 
         return pl.scan_parquet(cache_dir / "listen_events.parquet")
 
-    def get_sessions(self, n_partitions: int = 1) -> pl.LazyFrame:
-        """Get sessionized data, computing it if not cached.
+    def get_sessions(self) -> pl.LazyFrame:
+        """Get user-scoped sessions, computing and caching if not already cached.
 
-        Args:
-            n_partitions: Number of partitions for sequential processing. Use >1 for
-                large datasets that exceed available RAM (data is partitioned by user,
-                i.e. uid column).
+        Partitions the listen events by user (`uid % n_partitions`) and processes each
+        partition sequentially to fit within available RAM. The number of partitions
+        is estimated automatically based on dataset size.
+
+        Results are persisted under `<interim_dir>/<dataset_id>/<sessionization_id>/`
+        and reused on subsequent calls.
+
+        Returns:
+            A LazyFrame of extracted user-scoped listening sessions, scanned lazily from
+            the cached parquet files. Each row is a listen event annotated with its
+            `session_id` (it's unique per user, not globally).
         """
-        if n_partitions < 1:
-            raise ValueError("Number of partitions must be greater than 0.")
-
-        from impact.features import sessionize
-
-        sessions_dir = (
+        cache_dir = (
             self.interim_dir / self.config.dataset_id / self.config.sessionization_id
         )
-        success_marker = sessions_dir / "_SUCCESS"
+        success_marker = cache_dir / "_SUCCESS"
 
         # Atomicity check
         if not success_marker.exists():
+            # Clean up potentially corrupted partial runs
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+            cache_dir.mkdir(parents=True)
+
+            listens_lf = self.get_listen_events()
+            n_partitions = estimate_processing_partitions(data=listens_lf)
             logger.info(
                 "No complete sessionized data found in cache, computing...",
                 partitions=n_partitions,
             )
 
-            # Clean up potentially corrupted partial runs
-            if sessions_dir.exists():
-                shutil.rmtree(sessions_dir)
-
-            events_lf = self.get_raw_events()
-
-            sessions_dir.mkdir(parents=True)
-
-            for i in range(n_partitions):
+            for i in tqdm(range(n_partitions), desc="Sessionizing", unit="partition"):
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
                 sessionize(
-                    events_lf=events_lf.filter(pl.col("uid") % n_partitions == i),
-                    inactivity_gap_seconds=self.config.session.inactivity_gap_seconds,
+                    listens_lf=listens_lf.filter(pl.col("uid") % n_partitions == i),
                     tracks_per_session=self.config.session.tracks_per_session,
-                    min_listen_seconds=self.config.session.min_listen_seconds,
-                ).sink_parquet(sessions_dir / f"sessions_part_{i}.parquet")
+                ).sink_parquet(cache_dir / f"sessions_part_{i}.parquet")
 
             # Mark as completed
             success_marker.touch()
 
-        return pl.scan_parquet(sessions_dir / "sessions_part_*.parquet")
+        return pl.scan_parquet(cache_dir / "sessions_part_*.parquet")
 
-    def get_sequences(self, n_partitions: int = 1) -> pl.LazyFrame:
-        """Get extracted sequences of sessions, computing them if not cached.
+    def get_sequences(self) -> pl.LazyFrame:
+        """Get extracted sequences of sessions, computing if not already cached.
 
-        Args:
-            n_partitions: Number of partitions for sequential processing. Use >1 for
-                large datasets that exceed available RAM (data is partitioned by user,
-                i.e. uid column).
+        Partitions the sessions by user (`uid % n_partitions`) and processes each
+        partition sequentially to fit within available RAM. The number of partitions
+        is estimated automatically based on dataset size.
+
+        Results are persisted under
+        `<interim_dir>/<dataset_id>/<sessionization_id>/<sequence_extraction_id>/`
+        and reused on subsequent calls.
+
+        Returns:
+            A LazyFrame of sequences scanned lazily from the cached parquet files,
+            with a globally unique `sequence_idx` column assigned across all partitions
+            (1-based).
         """
-        if n_partitions < 1:
-            raise ValueError("Number of partitions must be greater than 0.")
-
-        from impact.features import extract_sequences
-
-        sequences_dir = (
+        cache_dir = (
             self.interim_dir
             / self.config.dataset_id
             / self.config.sessionization_id
             / self.config.sequence_extraction_id
         )
-        success_marker = sequences_dir / "_SUCCESS"
+        success_marker = cache_dir / "_SUCCESS"
 
         # Atomicity check
         if not success_marker.exists():
+            # Clean up potentially corrupted partial runs
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+            cache_dir.mkdir(parents=True)
+
+            sessions_lf = self.get_sessions()
+            n_partitions = estimate_processing_partitions(data=sessions_lf)
             logger.info(
                 "No complete sequenced data found in cache, computing...",
                 partitions=n_partitions,
             )
 
-            # Clean up potentially corrupted partial runs
-            if sequences_dir.exists():
-                shutil.rmtree(sequences_dir)
-
-            sessions_lf = self.get_sessions(n_partitions=n_partitions)
-
-            sequences_dir.mkdir(parents=True)
-
-            for i in range(n_partitions):
+            for i in tqdm(range(n_partitions), desc="Sequencing", unit="partition"):
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
-
                 extract_sequences(
                     sessions_lf=sessions_lf.filter(pl.col("uid") % n_partitions == i),
                     context_sessions=self.config.sequence.context_sessions,
                     step=self.config.sequence.step,
                     assign_index=False,  # Assign global index after merging
-                ).sink_parquet(sequences_dir / f"sequences_part_{i}.parquet")
+                ).sink_parquet(cache_dir / f"sequences_part_{i}.parquet")
 
             # Mark as completed
             success_marker.touch()
 
         # Assign global index
-        return pl.scan_parquet(
-            sequences_dir / "sequences_part_*.parquet"
-        ).with_row_index("sequence_idx", offset=1)
+        return pl.scan_parquet(cache_dir / "sequences_part_*.parquet").with_row_index(
+            "sequence_idx", offset=1
+        )
 
-    def get_splits(
-        self,
-        n_partitions: int = 1,
-        compute_ram_fraction: float = 0.15,
-    ) -> tuple[TemporalSplit, ItemIndex]:
-        """Get final train/val/test splits, computing them if not cached.
+    def get_splits(self) -> tuple[TemporalSplit, ItemIndex]:
+        """Get temporal train/val/test splits and item index, computing if not cached.
 
-        Args:
-            n_partitions: Number of partitions for sequential processing. Use >1 for
-                large datasets that exceed available RAM (data is partitioned by user,
-                i.e. uid column).
-            compute_ram_fraction: Fraction of available RAM allowed per processing
-                partition. It should be kept low (<=0.15) to account for memory spikes
-                during joins, explodes, and struct (non-streamable) Polars operations.
+        Unlike other pipeline stages, partitioning and disk writes are handled
+        internally by `impact.features.split()`. This is intentional because the
+        item-to-index mapping is derived from the train set and must be known before
+        val/test sets can be written, making the entire operation atomic. Partition
+        count and RAM management are estimated automatically inside `split()`.
+
+        Results are persisted under `<processed_dir>/<dataset_id>/<sessionization_id>/
+        <sequence_extraction_id>/<temporal_split_id>/` and reused on subsequent calls.
+
+        Returns:
+            A tuple of (TemporalSplit, ItemIndex) where splits are scanned lazily
+            from cached parquet files and the item index maps train-set item IDs to
+            contiguous 1-based indices (unseen items map to 0 which serves as padding).
         """
-        if n_partitions < 1:
-            raise ValueError("Number of partitions must be greater than 0.")
-
-        from impact.features import split
-
-        splits_dir = (
+        cache_dir = (
             self.processed_dir
             / self.config.dataset_id
             / self.config.sessionization_id
             / self.config.sequence_extraction_id
             / self.config.temporal_split_id
         )
-        item_to_idx_cache_dir = splits_dir / "item_to_idx"
-        train_cache_dir = splits_dir / "train"
-        val_cache_dir = splits_dir / "val"
-        test_cache_dir = splits_dir / "test"
-        success_marker = splits_dir / "_SUCCESS"
+        item_to_idx_cache_dir = cache_dir / "item_to_idx"
+        train_cache_dir = cache_dir / "train"
+        val_cache_dir = cache_dir / "val"
+        test_cache_dir = cache_dir / "test"
+        success_marker = cache_dir / "_SUCCESS"
 
         # Atomicity check
         if not success_marker.exists():
-            logger.info("No complete temporal splits found in cache, computing...")
-
             # Clean up potentially corrupted partial runs
-            if splits_dir.exists():
-                shutil.rmtree(splits_dir)
-
-            sequences_lf = self.get_sequences(n_partitions=n_partitions)
-
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+            cache_dir.mkdir(parents=True)
             item_to_idx_cache_dir.mkdir(parents=True)
             train_cache_dir.mkdir(parents=True)
             val_cache_dir.mkdir(parents=True)
             test_cache_dir.mkdir(parents=True)
+
+            sequences_lf = self.get_sequences()
+            logger.info("No complete temporal splits found in cache, computing...")
 
             # Discard the result as it has to be recreated at the end either way
             # (because of caching)
@@ -256,7 +276,6 @@ class DataPipeline:
                 test_days=self.config.gts.test_days,
                 val_days=self.config.gts.val_days,
                 gap_minutes=self.config.gts.gap_minutes,
-                compute_ram_fraction=compute_ram_fraction,
             )
 
             # Mark as completed
@@ -273,21 +292,29 @@ class DataPipeline:
         return temporal_split, item_index
 
     def tensorize(self, split: TemporalSplit) -> TensorizedSplit:
-        """Tensorize a given TemporalSplit into memory-mapped NumPy arrays.
+        """Get tensorized splits, computing and caching to disk if not already cached.
 
-        Converts each Parquet-backed split into dense [N, L, K] arrays suitable for
-        out-of-core PyTorch training. Results are cached under the pipeline's
-        `processed_dir`; subsequent calls with a complete cache skip recomputation.
+        Converts each parquet-backed split into dense `[N, L, K]` memory-mapped NumPy
+        arrays suitable for out-of-core PyTorch training, where N is the number of
+        sequences (samples), L is the number of context sessions, and K is the number
+        of tracks per session.
+
+        Unlike earlier pipeline stages, disk writes are handled internally by
+        `impact.features.tensorize()`. As memory-mapped arrays are files by definition,
+        writing to disk and creating the tensor are the same operation.
+
+        Results are persisted under
+        `<processed_dir>/<dataset_id>/<sessionization_id>/<sequence_extraction_id>/
+        <temporal_split_id>/tensors/` and reused on subsequent calls.
 
         Args:
             split: Temporal dataset splits, as returned by `get_splits()`.
 
         Returns:
-            TensorizedSplit with memory-mapped train, val, and test arrays.
+            A TensorizedSplit with memory-mapped train, val, and test arrays loaded
+            from the cached directory.
         """
-        from impact.features import tensorize
-
-        tensors_dir = (
+        cache_dir = (
             self.processed_dir
             / self.config.dataset_id
             / self.config.sessionization_id
@@ -295,30 +322,35 @@ class DataPipeline:
             / self.config.temporal_split_id
             / "tensors"
         )
-        success_marker = tensors_dir / "_SUCCESS"
+        success_marker = cache_dir / "_SUCCESS"
 
         # Atomicity check
         if not success_marker.exists():
-            logger.info("No complete tensorized splits found in cache, computing...")
-
             # Clean up potentially corrupted partial runs
-            if tensors_dir.exists():
-                shutil.rmtree(tensors_dir)
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+            cache_dir.mkdir(parents=True)
+
+            logger.info("No complete tensorized splits found in cache, computing...")
 
             dataset_by_name = {
                 "train": split.train,
                 "val": split.val,
                 "test": split.test,
             }
-            for name, dataset in dataset_by_name.items():
-                out_dir = tensors_dir / name
-                out_dir.mkdir(parents=True)
+            for name, dataset in tqdm(
+                dataset_by_name.items(),
+                desc="Tensorizing",
+                unit="split",
+            ):
+                dataset_cache_dir = cache_dir / name
+                dataset_cache_dir.mkdir(parents=True)
 
                 # Discard the result as it has to be recreated at the end either way
                 # (because of caching)
                 _ = tensorize(
                     dataset=dataset,
-                    out_dir=tensors_dir / name,
+                    out_dir=dataset_cache_dir,
                     tracks_per_session=self.config.session.tracks_per_session,
                     context_sessions=self.config.sequence.context_sessions,
                 )
@@ -328,9 +360,9 @@ class DataPipeline:
             logger.info("Tensorized splits computed successfully")
 
         return TensorizedSplit(
-            train=TensorizedDataset.from_dir(tensors_dir / "train"),
-            val=TensorizedDataset.from_dir(tensors_dir / "val"),
-            test=TensorizedDataset.from_dir(tensors_dir / "test"),
+            train=TensorizedDataset.from_dir(cache_dir / "train"),
+            val=TensorizedDataset.from_dir(cache_dir / "val"),
+            test=TensorizedDataset.from_dir(cache_dir / "test"),
         )
 
     def _save_to_cache(
@@ -339,20 +371,20 @@ class DataPipeline:
         cache_dir: Path,
         storage_partitions: int = 1,
     ) -> None:
-        """Write dataset to Parquet cache using predefined partitioning strategy.
+        """Write dataset to parquet cache using predefined partitioning strategy.
 
-        The function persists the input dataset to disk either as a single Parquet file
+        The function persists the input dataset to disk either as a single parquet file
         or as multiple partitioned files, depending on the provided `storage_partitions`
         parameter.
 
         If multiple partitions are requested and the dataset contains a `uid` column,
         data is split deterministically using a modulo-based partitioning strategy.
-        Otherwise, the dataset is written as a single Parquet file with a warning.
+        Otherwise, the dataset is written as a single parquet file with a warning.
 
         Args:
-            data: Dataset to be cached as Parquet files.
-            cache_dir: Directory where Parquet files will be saved.
-            storage_partitions: Number of storage partitions (number of Parquet files).
+            data: Dataset to be cached as parquet files.
+            cache_dir: Directory where parquet files will be saved.
+            storage_partitions: Number of storage partitions (number of parquet files).
         """
         cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -365,7 +397,7 @@ class DataPipeline:
         if storage_partitions == 1:
             path = cache_dir / "part_all.parquet"
 
-            logger.info("Writing to a single Parquet file...")
+            logger.info("Writing to a single parquet file...")
             if isinstance(data, pl.LazyFrame):
                 data.sink_parquet(path)
             else:
