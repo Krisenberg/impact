@@ -77,9 +77,9 @@ def thesis_theme() -> alt.theme.ThemeConfig:
             "title": {
                 "font": FONT,
                 "fontSize": FONT_SIZE_BASE,
-                "fontWeight": "normal",  # Let the thesis captions catch the eye
+                "fontWeight": "bold",
                 "color": COLOR_INK,
-                "anchor": "start",
+                "anchor": "middle",
             },
             # -- Axes --
             "axis": {
@@ -351,9 +351,11 @@ def plot_alpha_curve(
             ),
         )
 
-        pipeline = IMPACTEvaluationPipeline(eval_config, item_index, events_lf)
-        metrics: dict[str, float] = pipeline.evaluate(
-            split=tensorized_splits, sasrec_state_dict_path=sasrec_checkpoint_path
+        logger.info(f"Running IMPACT evaluation for {alpha=}...")
+        eval_pipeline = IMPACTEvaluationPipeline(eval_config, item_index, events_lf)
+        metrics: dict[str, float] = eval_pipeline.evaluate(
+            split_partition=tensorized_splits.val,
+            sasrec_state_dict_path=sasrec_checkpoint_path,
         )
 
         row = {"alpha": float(alpha), **metrics}
@@ -363,10 +365,10 @@ def plot_alpha_curve(
     labels: dict[str, dict[str, str]] = {
         "en": {
             "x_title": "α (0 = pure ACT-R, 1 = pure SASRec)",  # noqa: RUF001
-            "y_left_title": "NDCG@k (Overall & Repetition)",
-            "y_right_title": "NDCG@k (Exploration)",
+            "y_left_title": "NDCG@10 (Overall & Repetition)",
+            "y_right_title": "NDCG@10 (Exploration)",
             "title": "Effect of α on IMPACT Metrics",  # noqa: RUF001
-            "ndcg_at_10": "NDCG@k (Overall)",
+            "ndcg_at_10": "NDCG@10 (Overall)",
             "ndcg_local_rep_at_10": "Local Repetition",
             "ndcg_global_rep_at_10": "Global Repetition",
             "ndcg_local_exp_at_10": "Local Exploration",
@@ -374,10 +376,10 @@ def plot_alpha_curve(
         },
         "pl": {
             "x_title": "α (0 = wyłącznie ACT-R, 1 = wyłącznie SASRec)",  # noqa: RUF001
-            "y_left_title": "NDCG@k (ogólne i powtarzalność)",
-            "y_right_title": "NDCG@k (eksploracja)",
+            "y_left_title": "NDCG@10 (ogólne i powtarzalność)",
+            "y_right_title": "NDCG@10 (eksploracja)",
             "title": "Wpływ parametru α na metryki IMPACT",  # noqa: RUF001
-            "ndcg_at_10": "NDCG@k (ogólne)",
+            "ndcg_at_10": "NDCG@10 (ogólne)",
             "ndcg_local_rep_at_10": "Powtarzalność lokalna",
             "ndcg_global_rep_at_10": "Powtarzalność globalna",
             "ndcg_local_exp_at_10": "Eksploracja lokalna",
