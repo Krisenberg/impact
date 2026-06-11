@@ -3,8 +3,10 @@ from pathlib import Path
 
 import polars as pl
 import structlog
+from tqdm import tqdm
 
 from impact.config import ImpactConfig
+from impact.features import filter_listen_events
 from impact.schemas import (
     ItemIndex,
     ParquetTableSet,
@@ -57,6 +59,42 @@ class DataPipeline:
             dataset_size=self.config.dataset.size,
         )
         return fetcher.get_interactions(event_type=self.config.dataset.interaction_type)
+
+    def get_listen_events(self) -> pl.LazyFrame:
+        """Get valid listen events, computing and caching to disk if not already cached.
+
+        Filters raw events down to the listening events that meet the minimum playback
+        threshold defined in config. Results are persisted under
+        `<interim_dir>/<dataset_id>/listen_events/` and reused on subsequent calls.
+
+        Returns:
+            A LazyFrame of valid listen events with an `actual_played_seconds` column
+            added. Scanned lazily from the cached Parquet file.
+        """
+        cache_dir = self.interim_dir / self.config.dataset_id / "listen_events"
+        success_marker = cache_dir / "_SUCCESS"
+
+        if not success_marker.exists():
+            logger.info("No cached listen events found, computing...")
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+            cache_dir.mkdir(parents=True)
+
+            with tqdm(
+                desc="Computing listen events",
+                unit="",
+                bar_format="{desc}: {elapsed} {postfix}",
+            ) as bar:
+                filter_listen_events(
+                    events_lf=self.get_raw_events(),
+                    min_listen_seconds=self.config.session.min_listen_seconds,
+                ).sink_parquet(cache_dir / "listen_events.parquet")
+                bar.set_postfix_str("done")
+
+            success_marker.touch()
+            logger.info("Listen events computed and cached.")
+
+        return pl.scan_parquet(cache_dir / "listen_events.parquet")
 
     def get_sessions(self, n_partitions: int = 1) -> pl.LazyFrame:
         """Get sessionized data, computing it if not cached.
