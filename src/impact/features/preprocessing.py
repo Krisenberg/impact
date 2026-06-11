@@ -5,10 +5,16 @@ import structlog
 
 logger = structlog.stdlib.get_logger(__name__)
 
+MIN_LISTEN_SECONDS: int = 30
+"""Minimum playback duration (in seconds) to consider an event as a valid listen.
+Below this threshold events are treated as noise (accidental plays, skips).
+Follows the industry standard established in the literature.
+"""
+
 
 def filter_listen_events(
     events_lf: pl.LazyFrame,
-    min_listen_seconds: int = 30,
+    min_listen_seconds: int = MIN_LISTEN_SECONDS,
 ) -> pl.LazyFrame:
     """Filter raw events of all types down to valid listening events only.
 
@@ -18,7 +24,8 @@ def filter_listen_events(
     Args:
         events_lf: Raw LazyFrame containing all event types.
         min_listen_seconds: Minimum playback duration (in seconds) to consider an event
-            as a valid listen. Defaults to 30 (industry standard).
+            as a valid listen. Below this threshold events are treated as noise
+            (accidental plays, skips).
 
     Returns:
         A LazyFrame containing only `event_type == "listen"` rows where the user

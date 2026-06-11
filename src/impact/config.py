@@ -49,12 +49,6 @@ class SessionConfig:
     are truncated.
     """
 
-    min_listen_seconds: int = 30
-    """Minimum playback duration (in seconds) to consider an event as a valid listen.
-
-    Defaults to 30 (industry standard used by authors of other publications).
-    """
-
 
 @dataclass(frozen=True)
 class SequenceConfig:
@@ -243,7 +237,6 @@ class ImpactConfig:
             "sessions",
             f"gap{self.session.inactivity_gap_seconds}",
             f"k{self.session.tracks_per_session}",
-            f"min{self.session.min_listen_seconds}",
         ]
         return "_".join(parts)
 

@@ -78,17 +78,6 @@ def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
             """,
         ),
         click.option(
-            "--session-min-listen-seconds",
-            type=int,
-            default=30,
-            show_default=True,
-            help="""
-                Minimum playback duration (in seconds) to consider an event as a valid
-                listen. Defaults to 30 (industry standard used by authors of other
-                publications).
-            """,
-        ),
-        click.option(
             "--sequence-context-sessions",
             type=int,
             default=20,
