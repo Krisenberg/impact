@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, final
 
 import numpy as np
 import polars as pl
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 logger = structlog.stdlib.get_logger(__name__)
 
 
+@final
 class ACTRHistoryIndex:
     """In-memory index of user event histories for ACT-R scoring.
 
@@ -24,7 +25,7 @@ class ACTRHistoryIndex:
 
     def __init__(
         self,
-        events_lf: pl.LazyFrame,
+        listens_lf: pl.LazyFrame,
         eval_uids: list[int] | pl.Series,
         item_index: ItemIndex,
     ) -> None:
@@ -35,7 +36,9 @@ class ACTRHistoryIndex:
         timestamp for efficient cutoff slicing.
 
         Args:
-            events_lf: LazyFrame of all interaction events.
+            listens_lf: LazyFrame of valid listen events (event_type == "listen",
+                actual_played_seconds already computed and filtered). Contains the
+                listening history for all users.
             eval_uids: User IDs in the evaluation split; only these are indexed.
             item_index: Item-to-index mapping for ID translation derived from the
                 training split.
@@ -49,11 +52,11 @@ class ACTRHistoryIndex:
         self._history: dict[int, dict[str, np.ndarray]] = {}
         for uid, df in tqdm(
             iterable=(
-                events_lf.filter(
-                    pl.col("event_type") == "listen",
-                    pl.col("uid").is_in(eval_uids),
-                )
+                # Filter out non-eval users
+                listens_lf.filter(pl.col("uid").is_in(eval_uids))
+                # Map item IDs to indices
                 .join(item_index.table.lf, on="item_id", how="inner")
+                # The remaining operations are obvious
                 .select(["uid", "idx", "timestamp", "is_organic"])
                 .collect()
                 .partition_by("uid", as_dict=True)
