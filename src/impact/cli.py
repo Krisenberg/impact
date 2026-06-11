@@ -58,15 +58,6 @@ def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
             """,
         ),
         click.option(
-            "--session-inactivity-gap-seconds",
-            type=int,
-            default=1200,
-            show_default=True,
-            help="""
-                Number of seconds of inactivity before a session is considered finished.
-            """,
-        ),
-        click.option(
             "--session-tracks-per-session",
             type=int,
             default=10,

@@ -39,9 +39,6 @@ class DatasetConfig:
 class SessionConfig:
     """Configuration for the sessionization stage (Algorithm 1 in the thesis)."""
 
-    inactivity_gap_seconds: int = 1200
-    """Number of seconds of inactivity before a session is considered finished."""
-
     tracks_per_session: int = 10
     """Number of tracks that constitute a session. Denoted as K in the thesis.
 
@@ -235,7 +232,6 @@ class ImpactConfig:
         """Cache key for the sessionization stage (Algorithm 1 in the thesis)."""
         parts = [
             "sessions",
-            f"gap{self.session.inactivity_gap_seconds}",
             f"k{self.session.tracks_per_session}",
         ]
         return "_".join(parts)

@@ -3,22 +3,27 @@ import structlog
 
 logger = structlog.stdlib.get_logger(__name__)
 
+INACTIVITY_GAP_SECONDS: int = 1200
+"""Number of seconds of inactivity before a session is considered finished.
+Follows the industry standard used across the music streaming literature.
+"""
+
 
 def sessionize(
     listens_lf: pl.LazyFrame,
-    inactivity_gap_seconds: int = 1200,
     tracks_per_session: int = 10,  # K
+    inactivity_gap_seconds: int = INACTIVITY_GAP_SECONDS,
 ) -> pl.LazyFrame:
     """Extract user-scoped sessions from pre-filtered listen events.
 
     Args:
         listens_lf: LazyFrame of valid listen events (event_type == "listen",
             actual_played_seconds already computed and filtered).
-        inactivity_gap_seconds: Number of seconds of inactivity before a session is
-            considered finished. Defaults to 1200 (20 minutes).
         tracks_per_session: Number of tracks that constitute a session. Denoted as K in
             the thesis. Sessions with less than K tracks are discarded. Sessions with
             more than K tracks are truncated. Defaults to 10.
+        inactivity_gap_seconds: Number of seconds of inactivity before a session is
+            considered finished.
 
     Returns:
         A Polars LazyFrame extending the listens_lf by the session_id column containing
