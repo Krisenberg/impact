@@ -169,7 +169,8 @@ def train_sasrec(
     _ = sasrec_training_pipeline.train(
         split=tensorized_splits,
         num_items=item_index.num_items,
-        save_path=sasrec_state_dict_path,
+        checkpoint_path=sasrec_state_dict_path,
+        config_path=sasrec_state_dict_path.parent / "config.yaml",
     )
 
     logger.info("SASRecNBR training completed", path=sasrec_state_dict_path.as_posix())
@@ -421,7 +422,9 @@ def grid_search(
     tuning_results: list[dict[str, Any]] = []
 
     best_model_path: Path = out_dir / "best_model.pt"
+    best_config_path: Path = out_dir / "best_config.yaml"
     current_model_path: Path = out_dir / "current_model.pt"
+    current_config_path: Path = out_dir / "current_config.yaml"
 
     logger.info("Starting hyperparameter tuning (Grid Search)...")
     if impact_config.dataset.size != DatasetSize.SIZE_50M:
@@ -452,7 +455,8 @@ def grid_search(
             val_ndcg = sasrec_training_pipeline.train(
                 split=tensorized_splits,
                 num_items=item_index.num_items,
-                save_path=current_model_path,
+                checkpoint_path=current_model_path,
+                config_path=current_config_path,
             )
 
             tuning_results.append({"config_id": i, "val_ndcg": val_ndcg, **params})
@@ -463,8 +467,10 @@ def grid_search(
                 # Remove the so-far best model checkpoint
                 if best_model_path.exists():
                     best_model_path.unlink()
+                    best_config_path.unlink()
                 # Make the current model a new best one
                 _ = current_model_path.rename(best_model_path)
+                _ = current_config_path.rename(best_config_path)
                 logger.info(
                     "New best model configuration found and saved",
                     val_ndcg=round(val_ndcg, 4),
@@ -481,9 +487,6 @@ def grid_search(
     results_path = out_dir / "results.json"
     with results_path.open("w") as f:
         json.dump(tuning_results, f, indent=4)
-
-    best_config_path = out_dir / "best_impact_config.yaml"
-    best_config.write_yaml(best_config_path)
 
     logger.info(
         "Grid search completed",

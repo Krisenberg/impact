@@ -25,8 +25,6 @@ from impact.models.sasrec import (
 from impact.utils import seed_worker
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from impact.config import ImpactConfig
     from impact.schemas import TensorizedSplit
 
@@ -49,7 +47,8 @@ class SASRecTrainingPipeline:
         self,
         split: TensorizedSplit,
         num_items: int,
-        save_path: Path | None = None,
+        checkpoint_path: Path | None = None,
+        config_path: Path | None = None,
     ) -> float:
         """Initialise and train SASRecNBR with early stopping monitored via NDCG@K.
 
@@ -60,17 +59,29 @@ class SASRecTrainingPipeline:
             split: Tensorized train/val/test temporal splits; train is used for
                 training, val for early stopping.
             num_items: Catalog size, passed to the model and negative sampler.
-            save_path: Where to write the best-performing model checkpoint. If None, no
-                checkpoint is saved.
+            checkpoint_path: Path where the best-performing model checkpoint will be
+                saved. If None, no checkpoint or configuration snapshot is saved.
+            config_path: Path where the ImpactConfig YAML snapshot will be saved
+                alongside the best-performing model checkpoint. If None and
+                `checkpoint_path` is provided, the config snapshot is written to
+                `checkpoint_path.parent / "config.yaml"`. Cannot be specified when
+                `checkpoint_path` is None.
 
         Returns:
             Best NDCG@K (calculated on the validation set) reached before training
             terminated.
         """
-        if save_path is not None:
-            if save_path.exists():
-                raise ValueError(f"Checkpoint already exists: {save_path}")
-            save_path.parent.mkdir(parents=True, exist_ok=True)
+        if config_path is not None and checkpoint_path is None:
+            raise ValueError(
+                "config_path can only be specified when checkpoint_path is provided"
+            )
+
+        if checkpoint_path is not None:
+            if checkpoint_path.exists():
+                raise ValueError(f"Checkpoint already exists: {checkpoint_path}")
+
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path = config_path or checkpoint_path.parent / "config.yaml"
 
         logger.info(
             "Initializing SASRecNBR training run",
@@ -162,9 +173,9 @@ class SASRecTrainingPipeline:
                 best_ndcg = val_ndcg
                 epochs_without_improvement = 0
                 logger.info("New best model found", best_ndcg=round(best_ndcg, 4))
-                if save_path is not None:
-                    torch.save(model.state_dict(), save_path)
-                    self._config.write_yaml(save_path.parent / "config.yaml")
+                if checkpoint_path is not None:
+                    torch.save(model.state_dict(), checkpoint_path)
+                    self._config.write_yaml(cast(Path, config_path))
             else:
                 epochs_without_improvement += 1
 
@@ -174,10 +185,11 @@ class SASRecTrainingPipeline:
                 )
                 break
 
-        if save_path is not None:
+        if checkpoint_path is not None:
             logger.info(
                 "SASRecNBR training complete, best-performing model checkpoint saved",
-                best_model_path=save_path,
+                best_model_path=checkpoint_path,
+                impact_config_path=config_path,
             )
         else:
             logger.info("SASRecNBR training complete")
