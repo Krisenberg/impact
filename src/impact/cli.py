@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import dataclasses
+from enum import Enum
 from functools import cached_property, wraps
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin
 
 import click
 
@@ -18,6 +20,7 @@ from impact.config import (
     SystemConfig,
 )
 from impact.dataset import DatasetSize, DatasetType, InteractionType
+from impact.utils import find_sibling_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -345,5 +348,150 @@ class _ConfigSection:
     kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @cached_property
-    def field_names(self) -> set[str]:
-        return {f.name for f in dataclasses.fields(self.cls)}
+    def fields(self) -> dict[str, dataclasses.Field[Any]]:
+        return {f.name: f for f in dataclasses.fields(self.cls)}
+
+    @cached_property
+    def field_names(self) -> list[str]:
+        return list(self.fields.keys())
+
+
+def inject_impact_config_from_checkpoint(f: Callable[..., Any]) -> Callable[..., Any]:
+    """Add Click option for SASRecNBR checkpoint path and load its sibling YAML config.
+
+    Adds a required `--sasrec-checkpoint-path` option (validated to exist).
+    The decorated function must accept both of the following keyword arguments, which
+    this decorator provides:
+    - `sasrec_checkpoint_path: Path`: path to the checkpoint parsed from the CLI option.
+    - `impact_config: ImpactConfig`: config loaded via `utils.find_sibling_config()` and
+        `ImpactConfig.from_yaml()` from the checkpoint's sibling config file.
+
+    Use for commands operating on an existing trained model (e.g., IMPACT evaluation
+    or plotting). Combine with `cli.inject_impact_config_overrides(...)` to allow CLI
+    overrides of specific config sections (e.g. eval, actr) on top of the loaded config.
+    For commands that build a fresh config from CLI flags, use `inject_impact_config`
+    instead.
+    """
+    options = [
+        click.option(
+            "--sasrec-checkpoint-path",
+            type=click.Path(exists=True, dir_okay=False, path_type=Path),
+            required=True,
+            help="Path to a trained SASRecNBR checkpoint that will be evaluated.",
+        ),
+    ]
+
+    # Apply Click options to the function in reverse order to maintain defined ordering
+    for option in reversed(options):
+        f = option(f)
+
+    @wraps(f)
+    def _wrapper(*args: Any, **kwargs: Any) -> Any:
+        checkpoint_path: Path = kwargs["sasrec_checkpoint_path"]
+        kwargs["impact_config"] = ImpactConfig.from_yaml(
+            path=find_sibling_config(checkpoint_path)
+        )
+        return f(*args, **kwargs)
+
+    return _wrapper
+
+
+_OVERRIDE_SECTIONS: dict[str, _ConfigSection] = {
+    "actr": _ConfigSection(ACTRConfig),
+    "eval": _ConfigSection(EvalConfig),
+    "system": _ConfigSection(SystemConfig),
+}
+
+
+def inject_impact_config_overrides(
+    *sections: Literal["actr", "eval", "system"],
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Add CLI options to override fields of selected ImpactConfig sections.
+
+    Args:
+        sections: Section names to expose as overrides, e.g. "eval" or "actr". Each
+            field of the corresponding config dataclass becomes a `--{section}-{field}`
+            option, defaulting to None (meaning "keep the value from loaded config").
+
+    The decorated function must accept `impact_config: ImpactConfig` as a keyword
+    argument, populated upstream. Any explicitly-passed override is merged in via
+    `dataclasses.replace`, leaving other sections (e.g. `sasrec`) untouched.
+
+    Use together with `cli.inject_impact_config_from_checkpoint()` for commands that
+    load a checkpoint's saved config but need to adjust evaluation/runtime parameters.
+    """
+
+    def _decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+        unsupported = set(sections) - set(_OVERRIDE_SECTIONS.keys())
+        if unsupported:
+            raise ValueError(f"Unsupported override sections: {unsupported}")
+
+        chosen = {s: _OVERRIDE_SECTIONS[s] for s in sections}
+        options: list[Callable[[Any], Any]] = []
+        for section, config_section in chosen.items():
+            for field_name, field_def in config_section.fields.items():
+                option_name = f"--{section}-{field_name}".replace("_", "-")
+                multiple = _is_tuple_field(field_def)
+                options.append(
+                    click.option(
+                        option_name,
+                        type=_click_type_for(field_def),
+                        multiple=multiple,
+                        default=() if multiple else None,
+                        help=f"""
+                            Override {config_section.cls.__name__}.{field_name}.
+                            Defaults to the loaded config's value.
+                        """,
+                    )
+                )
+
+        # Apply Click options to the function in reverse order to maintain ordering
+        for option in reversed(options):
+            f = option(f)
+
+        @wraps(f)
+        def _wrapper(*args: Any, **kwargs: Any) -> Any:
+            impact_config: ImpactConfig = kwargs["impact_config"]
+
+            for section, config_section in chosen.items():
+                overrides: dict[str, Any] = {}
+                for field_name in config_section.field_names:
+                    kw_key = f"{section}_{field_name}"
+                    value = kwargs.pop(kw_key)
+                    if value in (None, ()):
+                        continue
+                    overrides[field_name] = value
+
+                if overrides:
+                    current_section = getattr(impact_config, section)
+                    impact_config = dataclasses.replace(
+                        impact_config,
+                        **{section: dataclasses.replace(current_section, **overrides)},
+                    )
+
+            kwargs["impact_config"] = impact_config
+            return f(*args, **kwargs)
+
+        return _wrapper
+
+    return _decorator
+
+
+def _is_tuple_field(field_def: dataclasses.Field[Any]) -> bool:
+    """Return True if the given dataclass field is a tuple type, or False otherwise."""
+    return get_origin(field_def.type) is tuple or (
+        isinstance(field_def.type, str) and field_def.type.startswith("tuple")
+    )
+
+
+def _click_type_for(field_def: dataclasses.Field[Any]) -> Any:
+    """Map a dataclass field's annotation to a Click parameter type."""
+    if _is_tuple_field(field_def):
+        # tuple[int, ...] -> int, tuple[str, ...] -> str, etc.
+        inner = get_args(field_def.type)[0] if get_args(field_def.type) else str
+        return inner
+    if field_def.type in (int, float, str, bool):
+        return field_def.type
+    if isinstance(field_def.type, type) and issubclass(field_def.type, Enum):
+        return click.Choice([e.value for e in field_def.type])
+    return str
