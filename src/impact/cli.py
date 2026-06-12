@@ -37,8 +37,8 @@ def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
 
     Use this for commands that configure a fresh run from scratch (e.g. training, grid
     search). For commands operating on an existing checkpoint (e.g. evaluation), use
-    `inject_config_from_checkpoint` instead, which loads the config that was saved
-    alongside the checkpoint rather than rebuilding it from CLI flags.
+    `inject_impact_config_from_checkpoint` instead, which loads the config that was
+    saved alongside the checkpoint rather than rebuilding it from CLI flags.
     """
     # Define all click options, matching the defaults from ImpactConfig
     options = [
