@@ -12,7 +12,11 @@ import click
 import dotenv
 import structlog
 
-from impact.cli import inject_impact_config
+from impact.cli import (
+    inject_impact_config,
+    inject_impact_config_from_checkpoint,
+    inject_impact_config_overrides,
+)
 from impact.dataset import DatasetSize
 from impact.logger import configure_logging
 from impact.pipelines import (
@@ -173,12 +177,6 @@ def train_sasrec(
 
 @cli.command(name="evaluate-impact")
 @click.option(
-    "--sasrec-checkpoint-path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    required=True,
-    help="Path to a trained SASRecNBR checkpoint that will be evaluated.",
-)
-@click.option(
     "--partition",
     type=click.Choice(["val", "test"], case_sensitive=False),
     default="test",
@@ -228,7 +226,8 @@ def train_sasrec(
     default=None,
     help="Base directory for log files. Defaults to <project_root>/logs.",
 )
-@inject_impact_config
+@inject_impact_config_from_checkpoint
+@inject_impact_config_overrides("actr", "eval", "system")
 def evaluate_impact(
     impact_config: ImpactConfig,
     sasrec_checkpoint_path: Path,
