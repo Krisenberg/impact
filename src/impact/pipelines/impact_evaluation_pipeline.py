@@ -10,7 +10,10 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from impact.evaluation.metrics import compute_ndcg_at_k, compute_recall_at_k
+from impact.evaluation.metrics import (
+    compute_per_sample_ndcg_at_k,
+    compute_per_sample_recall_at_k,
+)
 from impact.models.actr import ACTR, ACTRHistoryIndex
 from impact.models.sasrec import (
     EvalSequenceBatch,
@@ -62,6 +65,27 @@ class _TargetSplits:
     global_exp: torch.Tensor
 
 
+@dataclass(frozen=True, slots=True)
+class _BatchMetricResult:
+    """Batch-level evaluation results before global aggregation.
+
+    Stores both the aggregated metric contributions required for dataset-wide averaging
+    and the per-sample metric values required for statistical significance testing.
+
+    Attributes:
+        metric_sums: Sum of per-sample metric values for each metric. Used together with
+            `counts` to compute final dataset-wide means.
+        counts: Number of valid samples contributing to each evaluation scope.
+        per_sample_metrics: Raw per-sample metric values of shape [B] for each metric.
+            For "scoped" metrics, samples outside the scope are not excluded, but rather
+            contain NaN.
+    """
+
+    metric_sums: dict[str, float]
+    counts: dict[EvalScopeKey, int]
+    per_sample_metrics: dict[str, torch.Tensor]
+
+
 @final
 class ImpactEvaluationPipeline:
     """Late-fusion evaluation pipeline for the IMPACT framework.
@@ -69,7 +93,8 @@ class ImpactEvaluationPipeline:
     Combines a trained SASRecNBR model with a deterministic ACT-R scorer via a weighted
     combination controlled by `ImpactConfig.eval.alpha` (1.0 = SASRec only, 0.0 = ACT-R
     only). Both models score the full item catalog; their probability distributions are
-    then fused and evaluated against held-out test sessions.
+    then fused and evaluated against sessions from the held-out partition (validation
+    or test).
 
     Reported metrics are NDCG@k and Recall@k decomposed across five evaluation scopes:
     - global: all target items.
@@ -329,13 +354,17 @@ class ImpactEvaluationPipeline:
         self,
         final_scores: torch.Tensor,
         target_splits: _TargetSplits,
-    ) -> tuple[dict[str, float], dict[EvalScopeKey, int]]:
-        """Compute metric sums (unnormalized) for one batch across all k cutoffs.
+    ) -> _BatchMetricResult:
+        """Compute batch-level metric aggregates and per-sample metric values.
 
-        For each configured k and each evaluation scope, computes NDCG@k and Recall@k
-        weighted by the number of valid samples in that scope (value * count). Division
-        by cumulative counts is done in `evaluate()` so that final metric averages are
-        correct across batches.
+        For each configured k cutoff and evaluation scope, computes NDCG@k and Recall@k
+        on a per-sample basis. Aggregated metric sums are computed for dataset-wide
+        averaging, while the raw per-sample values are preserved for statistical
+        significance testing.
+
+        Samples that do not belong to a given evaluation scope receive NaN values.
+        It allows scope-specific metrics to be aligned with the original batch while
+        being excluded from dataset-wide aggregation (via `torch.nanmean()`).
 
         Args:
             final_scores: [B, num_items + 1] final score tensor after late-fusion with
@@ -344,37 +373,47 @@ class ImpactEvaluationPipeline:
                 `_derive_target_splits`.
 
         Returns:
-            metric_sums: Metric sums keyed by canonical metric name (e.g., "ndcg_at_5",
-                "recall_global_exp_at_5").
-            counts: Number of valid (non-empty) samples per `EvalScopeKey`.
+            `_BatchMetricResult` containing:
+            - unnormalized metric sums for dataset-wide aggregation,
+            - valid sample counts for each evaluation scope,
+            - raw per-sample metric values.
         """
-        counts: dict[EvalScopeKey, int] = {
-            "global": target_splits.global_.size(0),
-            "local_rep": int((target_splits.local_rep != 0).any(dim=-1).sum().item()),
-            "local_exp": int((target_splits.local_exp != 0).any(dim=-1).sum().item()),
-            "global_rep": int((target_splits.global_rep != 0).any(dim=-1).sum().item()),
-            "global_exp": int((target_splits.global_exp != 0).any(dim=-1).sum().item()),
+        scope_mask: dict[EvalScopeKey, torch.Tensor] = {
+            "global": (target_splits.global_ != 0).any(dim=-1),
+            "local_rep": (target_splits.local_rep != 0).any(dim=-1),
+            "local_exp": (target_splits.local_exp != 0).any(dim=-1),
+            "global_rep": (target_splits.global_rep != 0).any(dim=-1),
+            "global_exp": (target_splits.global_exp != 0).any(dim=-1),
         }
-
-        metric_scopes: list[tuple[EvalScopeKey, torch.Tensor, int]] = [
-            ("global", target_splits.global_, counts["global"]),
-            ("local_rep", target_splits.local_rep, counts["local_rep"]),
-            ("local_exp", target_splits.local_exp, counts["local_exp"]),
-            ("global_rep", target_splits.global_rep, counts["global_rep"]),
-            ("global_exp", target_splits.global_exp, counts["global_exp"]),
+        counts: dict[EvalScopeKey, int] = {
+            scope: int(mask.sum().item()) for scope, mask in scope_mask.items()
+        }
+        metric_scopes: list[tuple[EvalScopeKey, torch.Tensor]] = [
+            ("global", target_splits.global_),
+            ("local_rep", target_splits.local_rep),
+            ("local_exp", target_splits.local_exp),
+            ("global_rep", target_splits.global_rep),
+            ("global_exp", target_splits.global_exp),
         ]
 
-        batch_metrics: dict[str, float] = {}
-        for k in self._config.eval.k_cutoffs:
-            for scope, targets, count in metric_scopes:
-                batch_metrics[_metric_name("ndcg", scope, k)] = (
-                    compute_ndcg_at_k(final_scores, targets, k) * count
-                )
-                batch_metrics[_metric_name("recall", scope, k)] = (
-                    compute_recall_at_k(final_scores, targets, k) * count
-                )
+        metric_sums: dict[str, float] = {}
+        per_sample_metrics: dict[str, torch.Tensor] = {}
 
-        return batch_metrics, counts
+        for k in self._config.eval.k_cutoffs:
+            for scope, targets in metric_scopes:
+                ndcg = compute_per_sample_ndcg_at_k(final_scores, targets, k)
+                recall = compute_per_sample_recall_at_k(final_scores, targets, k)
+
+                ndcg_name = _metric_name("ndcg", scope, k)
+                recall_name = _metric_name("recall", scope, k)
+
+                per_sample_metrics[ndcg_name] = ndcg
+                per_sample_metrics[recall_name] = recall
+
+                metric_sums[ndcg_name] = torch.nansum(ndcg).item()
+                metric_sums[recall_name] = torch.nansum(recall).item()
+
+        return _BatchMetricResult(metric_sums, counts, per_sample_metrics)
 
     def _derive_target_splits(
         self,
