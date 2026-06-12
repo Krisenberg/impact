@@ -164,6 +164,7 @@ class SASRecTrainingPipeline:
                 logger.info("New best model found", best_ndcg=round(best_ndcg, 4))
                 if save_path is not None:
                     torch.save(model.state_dict(), save_path)
+                    self._config.write_yaml(save_path.parent / "config.yaml")
             else:
                 epochs_without_improvement += 1
 
