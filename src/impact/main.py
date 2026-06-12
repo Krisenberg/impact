@@ -6,7 +6,7 @@ import itertools
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import click
 import dotenv
@@ -179,8 +179,7 @@ def train_sasrec(
 @click.option(
     "--partition",
     type=click.Choice(["val", "test"], case_sensitive=False),
-    default="test",
-    show_default=True,
+    required=True,
     help="""
         Dataset partition to evaluate on. Use 'val' during hyperparameter search,
         'test' for final evaluation on the held-out data.
@@ -231,7 +230,7 @@ def train_sasrec(
 def evaluate_impact(
     impact_config: ImpactConfig,
     sasrec_checkpoint_path: Path,
-    partition: str = "test",
+    partition: Literal["val", "test"],
     log_level: str = "INFO",
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
