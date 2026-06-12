@@ -73,7 +73,7 @@ class DataPipeline:
 
         Returns:
             A LazyFrame of raw interaction events of all types, scanned lazily from the
-            cached arquet files.
+            cached parquet files.
         """
         fetcher = YambdaFetcher(
             cache_dir=self.raw_dir,
@@ -101,16 +101,20 @@ class DataPipeline:
             # Clean up potentially corrupted partial runs
             if cache_dir.exists():
                 shutil.rmtree(cache_dir)
-            cache_dir.mkdir(parents=True)
 
+            events_lf = self.get_raw_events()
             logger.info("No complete cached listen events found, computing...")
+
+            # Must be created after upstream stages, as they may remove and recreate
+            # parent cache directories when rebuilding their caches.
+            cache_dir.mkdir(parents=True)
 
             with tqdm(
                 desc="Computing listen events",
                 unit="",
                 bar_format="{desc}: {elapsed} {postfix}",
             ) as bar:
-                filter_listen_events(events_lf=self.get_raw_events()).sink_parquet(
+                filter_listen_events(events_lf).sink_parquet(
                     path=cache_dir / "listen_events.parquet",
                 )
                 bar.set_postfix_str("done")
@@ -145,7 +149,6 @@ class DataPipeline:
             # Clean up potentially corrupted partial runs
             if cache_dir.exists():
                 shutil.rmtree(cache_dir)
-            cache_dir.mkdir(parents=True)
 
             listens_lf = self.get_listen_events()
             n_partitions = estimate_processing_partitions(data=listens_lf)
@@ -153,6 +156,10 @@ class DataPipeline:
                 "No complete sessionized data found in cache, computing...",
                 partitions=n_partitions,
             )
+
+            # Must be created after upstream stages, as they may remove and recreate
+            # parent cache directories when rebuilding their caches.
+            cache_dir.mkdir(parents=True)
 
             for i in tqdm(range(n_partitions), desc="Sessionizing", unit="partition"):
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
@@ -195,7 +202,6 @@ class DataPipeline:
             # Clean up potentially corrupted partial runs
             if cache_dir.exists():
                 shutil.rmtree(cache_dir)
-            cache_dir.mkdir(parents=True)
 
             sessions_lf = self.get_sessions()
             n_partitions = estimate_processing_partitions(data=sessions_lf)
@@ -203,6 +209,10 @@ class DataPipeline:
                 "No complete sequenced data found in cache, computing...",
                 partitions=n_partitions,
             )
+
+            # Must be created after upstream stages, as they may remove and recreate
+            # parent cache directories when rebuilding their caches.
+            cache_dir.mkdir(parents=True)
 
             for i in tqdm(range(n_partitions), desc="Sequencing", unit="partition"):
                 logger.info("Computing partition", partition=i + 1, total=n_partitions)
@@ -256,14 +266,17 @@ class DataPipeline:
             # Clean up potentially corrupted partial runs
             if cache_dir.exists():
                 shutil.rmtree(cache_dir)
+
+            sequences_lf = self.get_sequences()
+            logger.info("No complete temporal splits found in cache, computing...")
+
+            # Must be created after upstream stages, as they may remove and recreate
+            # parent cache directories when rebuilding their caches.
             cache_dir.mkdir(parents=True)
             item_to_idx_cache_dir.mkdir(parents=True)
             train_cache_dir.mkdir(parents=True)
             val_cache_dir.mkdir(parents=True)
             test_cache_dir.mkdir(parents=True)
-
-            sequences_lf = self.get_sequences()
-            logger.info("No complete temporal splits found in cache, computing...")
 
             # Discard the result as it has to be recreated at the end either way
             # (because of caching)
