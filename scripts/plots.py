@@ -13,7 +13,10 @@ import numpy as np
 import polars as pl
 import structlog
 
-from impact.cli import inject_impact_config
+from impact.cli import (
+    inject_impact_config_from_checkpoint,
+    inject_impact_config_overrides,
+)
 from impact.config import ImpactConfig
 from impact.logger import configure_logging
 from impact.pipelines import DataPipeline, ImpactEvaluationPipeline
@@ -139,12 +142,6 @@ def cli() -> None:
 
 @cli.command(name="plot-alpha-curve")
 @click.option(
-    "--sasrec-checkpoint-path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    required=True,
-    help="Path to a trained SASRecNBR checkpoint that will be evaluated.",
-)
-@click.option(
     "--log-level",
     type=click.Choice(list(logging.getLevelNamesMapping()), case_sensitive=False),
     default="WARNING",
@@ -255,7 +252,8 @@ def cli() -> None:
     show_default=True,
     help="Scale factor for PNG export. 3.0 is approx. 216 PPI - suitable for print.",
 )
-@inject_impact_config
+@inject_impact_config_from_checkpoint
+@inject_impact_config_overrides("actr", "eval", "system")
 def plot_alpha_curve(
     impact_config: ImpactConfig,
     sasrec_checkpoint_path: Path,

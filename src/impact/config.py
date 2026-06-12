@@ -4,7 +4,9 @@ import hashlib
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
+
+import yaml
 
 from impact.dataset import DatasetSize, DatasetType, InteractionType
 
@@ -185,6 +187,13 @@ class ImpactConfig:
     file for exact reconstruction of any pipeline artifact.
     """
 
+    CONFIG_SCHEMA_VERSION: ClassVar[int] = 1
+    """Version of the configuration serialization schema.
+
+    Used to validate compatibility when loading ImpactConfig snapshots from YAML.
+    Increment when the serialized structure changes incompatibly.
+    """
+
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     """Configuration for the Yambda dataset fetcher."""
 
@@ -304,14 +313,60 @@ class ImpactConfig:
             output_path: Target path where the YAML file with the configuration snapshot
                 should be saved.
         """
-        import yaml
-
+        data = {
+            "schema_version": self.CONFIG_SCHEMA_VERSION,
+            "hash": self.config_hash,
+            **self.to_dict(),
+        }
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
         with output_path.open("w", encoding="utf-8") as f:
             yaml.safe_dump(
-                data=self.to_dict(),
+                data=data,
                 stream=f,
                 indent=2,
                 sort_keys=False,  # Prevents from sorting keys alphabetically
                 allow_unicode=True,
             )
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> ImpactConfig:
+        """Reconstruct an ImpactConfig from a YAML file written by `write_yaml()`.
+
+        Args:
+            path: Path to the YAML file.
+
+        Returns:
+            Reconstructed ImpactConfig instance.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+            ValueError: If required sections are missing, or the schema version is not
+                supported, or the configuration checksum does not match.
+        """
+        with path.open("r", encoding="utf-8") as f:
+            data: dict[str, Any] = yaml.safe_load(f)
+
+        schema_version = data.pop("schema_version")
+        if schema_version != cls.CONFIG_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported config schema version: {schema_version}.")
+
+        config = cls(
+            dataset=DatasetConfig(
+                size=DatasetSize(data["dataset"]["size"]),
+                format=DatasetType(data["dataset"]["format"]),
+                interaction_type=InteractionType(data["dataset"]["interaction_type"]),
+            ),
+            session=SessionConfig(**data["session"]),
+            sequence=SequenceConfig(**data["sequence"]),
+            gts=GTSConfig(**data["gts"]),
+            actr=ACTRConfig(**data["actr"]),
+            sasrec=SASRecConfig(**data["sasrec"]),
+            eval=EvalConfig(**data["eval"]),
+            system=SystemConfig(**data["system"]),
+        )
+
+        if config.config_hash != data.pop("hash"):
+            raise ValueError("Configuration checksum mismatch.")
+
+        return config
