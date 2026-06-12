@@ -198,6 +198,7 @@ strict = true                # Strict mode, refer to the mypy docs for details
 python_version = "3.12"      # Type check code assuming it will be running on the specified Python version
 pretty = true                # Use visually nicer output in error messages
 files = [                    # Type-check given files or directories
+    "scripts",
     "src",
     "tests"
 ]
@@ -251,6 +252,7 @@ executionEnvironments = [
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/config.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/main.py", reportExplicitAny = false },
+  { root = "src/impact/utils.py", reportImplicitStringConcatenation = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
   { root = "src/impact/features/sequence_extraction.py", reportExplicitAny = false },
   { root = "src/impact/features/tensorization.py", reportAny = false, reportExplicitAny = false },

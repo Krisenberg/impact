@@ -157,8 +157,8 @@ def generate_data_funnel_stats_table(
         logger.info(f"Processing {ds_size.name} dataset variant")
         variant_config = dataclasses.replace(
             impact_config,
-            dataset_size=ds_size,
-            step=variant.step,
+            dataset=dataclasses.replace(impact_config.dataset, size=ds_size),
+            sequence=dataclasses.replace(impact_config.sequence, step=variant.step),
         )
         pipeline.config = variant_config  # Switch pipeline config
 
