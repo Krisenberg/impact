@@ -6,6 +6,8 @@ from enum import Enum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
+import yaml
+
 from impact.dataset import DatasetSize, DatasetType, InteractionType
 
 if TYPE_CHECKING:
@@ -304,8 +306,6 @@ class ImpactConfig:
             output_path: Target path where the YAML file with the configuration snapshot
                 should be saved.
         """
-        import yaml
-
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("w", encoding="utf-8") as f:
             yaml.safe_dump(
@@ -315,3 +315,35 @@ class ImpactConfig:
                 sort_keys=False,  # Prevents from sorting keys alphabetically
                 allow_unicode=True,
             )
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> ImpactConfig:
+        """Reconstruct an ImpactConfig from a YAML snapshot.
+
+        Args:
+            path: Path to the YAML file.
+
+        Returns:
+            Reconstructed ImpactConfig instance.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+            ValueError: If required sections are missing.
+        """
+        with path.open("r", encoding="utf-8") as f:
+            data: dict[str, Any] = yaml.safe_load(f)
+
+        return cls(
+            dataset=DatasetConfig(
+                size=DatasetSize(data["dataset"]["size"]),
+                format=DatasetType(data["dataset"]["format"]),
+                interaction_type=InteractionType(data["dataset"]["interaction_type"]),
+            ),
+            session=SessionConfig(**data["session"]),
+            sequence=SequenceConfig(**data["sequence"]),
+            gts=GTSConfig(**data["gts"]),
+            actr=ACTRConfig(**data["actr"]),
+            sasrec=SASRecConfig(**data["sasrec"]),
+            eval=EvalConfig(**data["eval"]),
+            system=SystemConfig(**data["system"]),
+        )
