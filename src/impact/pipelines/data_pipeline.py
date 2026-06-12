@@ -109,15 +109,9 @@ class DataPipeline:
             # parent cache directories when rebuilding their caches.
             cache_dir.mkdir(parents=True)
 
-            with tqdm(
-                desc="Computing listen events",
-                unit="",
-                bar_format="{desc}: {elapsed} {postfix}",
-            ) as bar:
-                filter_listen_events(events_lf).sink_parquet(
-                    path=cache_dir / "listen_events.parquet",
-                )
-                bar.set_postfix_str("done")
+            filter_listen_events(events_lf).sink_parquet(
+                path=cache_dir / "listen_events.parquet",
+            )
 
             success_marker.touch()
             logger.info("Listen events computed and cached.")
