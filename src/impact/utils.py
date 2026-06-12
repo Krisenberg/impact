@@ -3,13 +3,17 @@ from __future__ import annotations
 import math
 import os
 import random
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import polars as pl
 import psutil
 import structlog
 import torch
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from pathlib import Path
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -55,6 +59,50 @@ def seed_worker(_: int) -> None:  # Ignore the argument (worker_id)
     worker_seed = torch.initial_seed() % WORKER_SEED_MODULUS
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+
+def find_sibling_config(
+    checkpoint_path: Path,
+    config_filename_patterns: Sequence[str] = (
+        "impact_config.yaml",
+        "config.yaml",
+        "*.yaml",
+    ),
+) -> Path:
+    """Locate the ImpactConfig YAML saved alongside a model checkpoint.
+
+    Searches `checkpoint_path.parent` for, in order of preference, files matching
+    each of `config_filename_patterns`. The first pattern that matches exactly one
+    file wins.
+
+    Args:
+        checkpoint_path: Path to the model checkpoint whose sibling config is sought.
+        config_filename_patterns: Glob patterns tried in order.
+
+    Returns:
+        Path to the matched config file.
+
+    Raises:
+        FileNotFoundError: If no pattern matches any file.
+        RuntimeError: If a pattern matches more than one file (ambiguous).
+    """
+    parent = checkpoint_path.parent
+    for pattern in config_filename_patterns:
+        matches = sorted(parent.glob(pattern))
+        if not matches:
+            continue
+        if len(matches) > 1:
+            raise RuntimeError(
+                f"Found multiple config candidates matching '{pattern}' in "
+                f"{parent}: {[m.name for m in matches]}. Expected exactly one."
+            )
+        return matches[0]
+
+    raise FileNotFoundError(
+        f"No config YAML found next to checkpoint {checkpoint_path.name} in "
+        f"{parent}. Tried patterns: {', '.join(config_filename_patterns)}. "
+        "Re-run model training to generate it automatically."
+    )
 
 
 def estimate_processing_partitions(
