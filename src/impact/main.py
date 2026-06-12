@@ -194,6 +194,25 @@ def train_sasrec(
     help="Logging verbosity level.",
 )
 @click.option(
+    "--save-raw-metrics",
+    is_flag=True,
+    default=False,
+    help="""
+        Collect and save per-sample raw metric values to a Parquet file, for statistical
+        significance testing. Note that this increase memory usage during evaluation.
+    """,
+)
+@click.option(
+    "--results-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="""
+        Directory to save evaluation artifacts (aggregated metrics JSON, and raw
+        per-sample metrics Parquet if --save-raw-metrics is set).
+        Defaults to <project_root>/reports/impact-evaluation.
+    """,
+)
+@click.option(
     "--raw-data-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
@@ -233,6 +252,8 @@ def evaluate_impact(
     sasrec_checkpoint_path: Path,
     partition: Literal["val", "test"],
     log_level: str = "INFO",
+    save_raw_metrics: bool = False,
+    results_dir: Path | None = None,
     raw_data_dir: Path | None = None,
     interim_data_dir: Path | None = None,
     processed_data_dir: Path | None = None,
@@ -248,14 +269,16 @@ def evaluate_impact(
     """
     timestamp = exec_time or datetime.datetime.now(datetime.UTC)
 
+    results_dir = results_dir or PROJECT_ROOT / "reports" / "impact-evaluation"
     raw_data_dir = raw_data_dir or PROJECT_ROOT / "data" / "raw"
     interim_data_dir = interim_data_dir or PROJECT_ROOT / "data" / "interim"
     processed_data_dir = processed_data_dir or PROJECT_ROOT / "data" / "processed"
     base_logs_dir = base_logs_dir or PROJECT_ROOT / "logs"
+    results_dir.mkdir(parents=True, exist_ok=True)
 
     # Configure logging
     logs_dir = _get_logs_dir(base_dir=base_logs_dir, timestamp=timestamp)
-    log_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_train-sasrec"
+    log_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_evaluate-impact"
     configure_logging(
         level=logging.getLevelNamesMapping()[log_level],
         log_file=logs_dir / f"{log_filename}.log",
@@ -298,10 +321,28 @@ def evaluate_impact(
         listens_lf=listens_lf,
     )
     logger.info("Running IMPACT evaluation...")
-
     split_partition = cast(TensorizedDataset, getattr(tensorized_splits, partition))
-    metrics = evaluation_pipeline.evaluate(split_partition, sasrec_checkpoint_path)
-    logger.info("IMPACT evaluation complete", **metrics)
+
+    eval_result = evaluation_pipeline.evaluate(
+        split_partition=split_partition,
+        sasrec_state_dict_path=sasrec_checkpoint_path,
+        collect_raw=save_raw_metrics,
+    )
+    logger.info("IMPACT evaluation complete", **eval_result.metrics)
+
+    metrics_path = results_dir / f"metrics_{impact_config.display_id}.json"
+    with metrics_path.open("w") as f:
+        json.dump(eval_result.metrics, f, indent=4)
+    logger.info("Aggregated metrics saved", metrics_path=metrics_path.as_posix())
+
+    if save_raw_metrics:
+        if eval_result.raw_metrics_df is None:
+            raise RuntimeError(
+                "save_raw_metrics=True but evaluate() returned no raw_metrics_df"
+            )
+        raw_path = results_dir / f"raw_metrics_{impact_config.display_id}.parquet"
+        eval_result.raw_metrics_df.write_parquet(raw_path)
+        logger.info("Raw metrics saved", raw_metrics_path=raw_path.as_posix())
 
 
 @cli.command(name="sasrec-grid-search")
