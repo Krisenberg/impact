@@ -27,8 +27,15 @@ if TYPE_CHECKING:
 def inject_impact_config(f: Callable[..., Any]) -> Callable[..., Any]:
     """Inject ImpactConfig fields as Click options and pass the instantiated config.
 
-    The decorated function must accept `impact_config: ImpactConfig` as a keyword
-    argument.
+    Adds one Click option per ImpactConfig field (grouped by nested config section),
+    using ImpactConfig's defaults as the option defaults. The decorated function must
+    accept `impact_config: ImpactConfig` as a keyword argument; it is constructed at
+    call time from the parsed CLI values.
+
+    Use this for commands that configure a fresh run from scratch (e.g. training, grid
+    search). For commands operating on an existing checkpoint (e.g. evaluation), use
+    `inject_config_from_checkpoint` instead, which loads the config that was saved
+    alongside the checkpoint rather than rebuilding it from CLI flags.
     """
     # Define all click options, matching the defaults from ImpactConfig
     options = [

@@ -331,7 +331,7 @@ class ImpactConfig:
 
     @classmethod
     def from_yaml(cls, path: Path) -> ImpactConfig:
-        """Reconstruct an ImpactConfig from a YAML snapshot.
+        """Reconstruct an ImpactConfig from a YAML file written by `write_yaml()`.
 
         Args:
             path: Path to the YAML file.
