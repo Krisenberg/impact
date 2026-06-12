@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast, final, get_args
 
 import numpy as np
+import polars as pl
 import structlog
 import torch
 from torch.utils.data import DataLoader
@@ -26,8 +27,6 @@ from impact.utils import seed_worker
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import polars as pl
 
     from impact.config import ImpactConfig
     from impact.schemas import ItemIndex, TensorizedDataset
@@ -86,6 +85,23 @@ class _BatchMetricResult:
     per_sample_metrics: dict[str, torch.Tensor]
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluationResult:
+    """Result of IMPACT evaluation on a held-out partition.
+
+    Attributes:
+        metrics: Aggregated metric values (metric name -> mean) computed over the entire
+            partition.
+        raw_metrics_df: Per-sample raw metric values, used for statistical significance
+            testing. Represented as a Polars DataFrame containing one row per evaluated
+            sample and one column per metric. Each sample is identified by a (uid,
+            target_ts) key. None unless raw metric collection was explicitly requested.
+    """
+
+    metrics: dict[str, float]
+    raw_metrics_df: pl.DataFrame | None = None
+
+
 @final
 class ImpactEvaluationPipeline:
     """Late-fusion evaluation pipeline for the IMPACT framework.
@@ -103,8 +119,10 @@ class ImpactEvaluationPipeline:
     - global_rep / global_exp: items repeated from or absent in the user's full
         interaction history (i.e. long-term novelty).
 
-    This decomposition lets the caller analyze the repetition-exploration trade-off
-    introduced by varying alpha.
+    This decomposition allows for a granular analysis of the repetition-exploration
+    trade-off introduced by varying alpha. Furthermore, the pipeline optionally extracts
+    raw, per-sample metrics to enable post-hoc statistical significance testing between
+    model variants.
     """
 
     def __init__(
@@ -131,16 +149,17 @@ class ImpactEvaluationPipeline:
         self,
         split_partition: TensorizedDataset,
         sasrec_state_dict_path: Path,
-    ) -> dict[str, float]:
+        collect_raw: bool = False,
+    ) -> EvaluationResult:
         """Evaluate the IMPACT model on the given split partition.
 
-        Loads the SASRecNBR checkpoint, builds the ACT-R history index for test users,
+        Loads the SASRecNBR checkpoint, builds the ACT-R history index for eval users,
         and runs batched inference over the full item catalog. Final scores are
         a combination of SASRec and ACT-R probabilities (late-fusion) controlled by
         `ImpactConfig.eval.alpha` (1.0 = SASRec only, 0.0 = ACT-R only).
 
-        Metrics are computed at every cutoff listed in `ImpactConfig.eval.k_cutoffs`
-        and returned as a flat dictionary. The key schema is:
+        Metrics are computed at every cutoff listed in `ImpactConfig.eval.k_cutoffs`.
+        The aggregated metric keys follow the schema:
 
             `{metric}_{scope}_at_{k}`
 
@@ -153,9 +172,13 @@ class ImpactEvaluationPipeline:
                 `TensorizedSplit.val` during hyperparameter search and
                 `TensorizedSplit.test` for final evaluation on the held-out data.
             sasrec_state_dict_path: Path to the saved SASRecNBR checkpoint.
+            collect_raw: Whether to collect raw per-sample metric values. When True,
+                the returned result includes a Polars DataFrame necessary for post-hoc
+                statistical significance testing.
 
         Returns:
-            Flat metric dictionary with `10 * len(ImpactConfig.eval.k_cutoffs)` entries.
+            An `EvaluationResult` containing the aggregated metric dictionary and,
+            if requested, the raw per-sample metrics DataFrame.
         """
         logger.info("Starting evaluation pipeline")
 
@@ -186,6 +209,13 @@ class ImpactEvaluationPipeline:
         batch_metric_sums: dict[str, float] = dict.fromkeys(metric_names, 0.0)
         total_counts: dict[str, int] = dict.fromkeys(get_args(EvalScopeKey), 0)
 
+        # Accumulators for per-sample raw values (only populated if collect_raw)
+        raw_uids: list[torch.Tensor] = []
+        raw_target_ts: list[torch.Tensor] = []
+        raw_metric_values: dict[str, list[torch.Tensor]] = {
+            name: [] for name in metric_names
+        }
+
         test_loader = DataLoader[EvalSequenceSample](
             dataset=EvalSequenceDataset(split_partition),
             batch_size=self._config.eval.batch_size,
@@ -200,7 +230,6 @@ class ImpactEvaluationPipeline:
         iterator = cast(Iterator[EvalSequenceBatch], iter(test_loader))
         for batch in tqdm(iterator, desc="Evaluation", leave=False):
             batch = batch.to(device)
-
             sasrec_logits = sasrec.score_all_items(sasrec.encode(context=batch.context))
 
             # Compute global-repetition mask and optionally BLA scores in a single pass
@@ -237,15 +266,21 @@ class ImpactEvaluationPipeline:
                 context=batch.context,
                 is_global_repeated=is_global_repeated,
             )
-            batch_metrics, counts = self._compute_batch_metrics(
+            batch_metric_result = self._compute_batch_metrics(
                 final_scores=final_scores,
                 target_splits=target_splits,
             )
 
-            for metric, sum_ in batch_metrics.items():
+            for metric, sum_ in batch_metric_result.metric_sums.items():
                 batch_metric_sums[metric] += sum_
-            for scope, count in counts.items():
+            for scope, count in batch_metric_result.counts.items():
                 total_counts[scope] += count
+
+            if collect_raw:
+                raw_uids.append(batch.uid.detach().cpu())
+                raw_target_ts.append(batch.target_ts.detach().cpu())
+                for metric, values in batch_metric_result.per_sample_metrics.items():
+                    raw_metric_values[metric].append(values.detach().cpu())
 
         logger.info("Aggregating metrics across batches")
         metrics: dict[str, float] = {
@@ -258,8 +293,21 @@ class ImpactEvaluationPipeline:
             for scope in get_args(EvalScopeKey)
         }
 
+        raw_df: pl.DataFrame | None = None
+        if collect_raw:
+            raw_df = pl.DataFrame(
+                {
+                    "uid": torch.cat(raw_uids).numpy(),
+                    "target_ts": torch.cat(raw_target_ts).numpy(),
+                    **{
+                        metric: torch.cat(values).numpy()
+                        for metric, values in raw_metric_values.items()
+                    },
+                }
+            )
+
         logger.info("Evaluation complete")
-        return metrics
+        return EvaluationResult(metrics=metrics, raw_metrics_df=raw_df)
 
     def _load_sasrec(self, state_dict_path: Path, device: torch.device) -> SASRecNBR:
         """Load SASRecNBR from a checkpoint and set the model to eval mode."""
