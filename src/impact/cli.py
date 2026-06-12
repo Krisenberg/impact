@@ -4,7 +4,7 @@ import dataclasses
 from enum import Enum
 from functools import cached_property, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin, get_type_hints
 
 import click
 
@@ -348,12 +348,12 @@ class _ConfigSection:
     kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @cached_property
-    def fields(self) -> dict[str, dataclasses.Field[Any]]:
-        return {f.name: f for f in dataclasses.fields(self.cls)}
+    def field_names(self) -> list[str]:
+        return [f.name for f in dataclasses.fields(self.cls)]
 
     @cached_property
-    def field_names(self) -> list[str]:
-        return list(self.fields.keys())
+    def type_hints(self) -> dict[str, Any]:
+        return get_type_hints(self.cls)
 
 
 def inject_impact_config_from_checkpoint(f: Callable[..., Any]) -> Callable[..., Any]:
@@ -414,8 +414,9 @@ def inject_impact_config_overrides(
             option, defaulting to None (meaning "keep the value from loaded config").
 
     The decorated function must accept `impact_config: ImpactConfig` as a keyword
-    argument, populated upstream. Any explicitly-passed override is merged in via
-    `dataclasses.replace`, leaving other sections (e.g. `sasrec`) untouched.
+    argument, populated upstream. Only explicitly provided CLI values override the
+    loaded configuration. All other fields retain their values from the checkpoint
+    snapshot.
 
     Use together with `cli.inject_impact_config_from_checkpoint()` for commands that
     load a checkpoint's saved config but need to adjust evaluation/runtime parameters.
@@ -429,19 +430,22 @@ def inject_impact_config_overrides(
         chosen = {s: _OVERRIDE_SECTIONS[s] for s in sections}
         options: list[Callable[[Any], Any]] = []
         for section, config_section in chosen.items():
-            for field_name, field_def in config_section.fields.items():
+            for field_name in config_section.field_names:
+                field_type = config_section.type_hints[field_name]
+
                 option_name = f"--{section}-{field_name}".replace("_", "-")
-                multiple = _is_tuple_field(field_def)
+                multiple = get_origin(field_type) is tuple
+
                 options.append(
                     click.option(
                         option_name,
-                        type=_click_type_for(field_def),
+                        type=_click_type_for(field_type),
                         multiple=multiple,
                         default=() if multiple else None,
-                        help=f"""
-                            Override {config_section.cls.__name__}.{field_name}.
-                            Defaults to the loaded config's value.
-                        """,
+                        help=(
+                            f"Override {config_section.cls.__name__}.{field_name}. "
+                            "Defaults to the loaded config's value."
+                        ),
                     )
                 )
 
@@ -457,7 +461,7 @@ def inject_impact_config_overrides(
                 overrides: dict[str, Any] = {}
                 for field_name in config_section.field_names:
                     kw_key = f"{section}_{field_name}"
-                    value = kwargs.pop(kw_key)
+                    value = kwargs.pop(kw_key, None)
                     if value in (None, ()):
                         continue
                     overrides[field_name] = value
@@ -477,21 +481,15 @@ def inject_impact_config_overrides(
     return _decorator
 
 
-def _is_tuple_field(field_def: dataclasses.Field[Any]) -> bool:
-    """Return True if the given dataclass field is a tuple type, or False otherwise."""
-    return get_origin(field_def.type) is tuple or (
-        isinstance(field_def.type, str) and field_def.type.startswith("tuple")
-    )
+def _click_type_for(type_: Any) -> Any:
+    """Map Python type to a Click parameter type."""
+    if get_origin(type_) is tuple:
+        return get_args(type_)[0]
 
+    if type_ in (int, float, str):
+        return type_
 
-def _click_type_for(field_def: dataclasses.Field[Any]) -> Any:
-    """Map a dataclass field's annotation to a Click parameter type."""
-    if _is_tuple_field(field_def):
-        # tuple[int, ...] -> int, tuple[str, ...] -> str, etc.
-        inner = get_args(field_def.type)[0] if get_args(field_def.type) else str
-        return inner
-    if field_def.type in (int, float, str, bool):
-        return field_def.type
-    if isinstance(field_def.type, type) and issubclass(field_def.type, Enum):
-        return click.Choice([e.value for e in field_def.type])
+    if isinstance(type_, type) and issubclass(type_, Enum):
+        return click.Choice([e.value for e in type_])
+
     return str
