@@ -4,9 +4,7 @@
 
 Built for master's thesis at Wrocław University of Science and Technology.
 
-<!-- ![CI](https://img.shields.io/badge/CI-passing-brightgreen) -->
-[![Actions status](https://github.com/Krisenberg/impact/workflows/CI/badge.svg)](https://github.com/Krisenberg/impact/actions)
-<!-- ![Ruff](https://img.shields.io/badge/lint-ruff-261230) -->
+[![CI](https://github.com/Krisenberg/impact/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Krisenberg/impact/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
