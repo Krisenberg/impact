@@ -16,11 +16,35 @@ Sequential recommender systems, such as SASRec [[1]](#1), model what a user want
 
 Experiments showed that ACT-R achieves the highest ranking accuracy (NDCG@10), but can only recommend tracks already present in the user's listening history &mdash; its global exploration score is exactly 0.000 by definition. SASRec can recommend novel, previously unheard tracks, but at substantially lower ranking accuracy. **IMPACT** combines both capabilities, and on the full-scale **Yambda-5B** dataset (4.8 billion interactions) [[3]](#3) **improves NDCG@10 by +114%** relative to SASRec, while still being able to recommend tracks that the user has never heard before.
 
+## Architecture
+
+The two pathways &mdash; SASRec and ACT-R &mdash; are fully decoupled and independent of each other. Fusion happens only at inference time, via a single hyperparameter alpha.
+
 <p align="center">
-  <img src="assets/impact_architecture.svg"
+    <img src="assets/impact_architecture.svg"
        alt="IMPACT architecture: SASRec (session mean pooling + self-attention) and ACT-R (BLA+ memory signal) as independent pathways, merged at inference via a softmax-weighted late-fusion gate controlled by the hyperparameter alpha."
        width="860">
 </p>
+
+## Results
+
+Three configurations of IMPACT were evaluated on the held-out Yambda-5B test set: pure ACT-R (alpha = 0), the optimal (empirically found) hybrid (alpha = 0.4) and pure SASRec (alpha = 1).
+
+| Metric | ACT-R (alpha=0) | **IMPACT (alpha=0.4)** | SASRec (alpha=1) |
+|---|---|---|---|
+| NDCG@10 | 0.0894 | **0.0650** | 0.0304 |
+| Recall@10 | 0.0805 | **0.0624** | 0.0258 |
+
+The results presented above, which use only overall metrics, tell a misleading story: ACT-R performs better than the hybrid with SASRec on both NDCG@10 and Recall@10, which might suggest that the SASRec component is unnecessary. To understand why ACT-R is superior and whether that superiority is desirable, the NDCG@10 metric is analysed along two dimensions &mdash; whether the recommended track is one the user already knows (*repetition*) or genuinely new to them (*exploration*), and whether the "knownness" is judged against the user's recent session window (*local*) or their entire listening history (global):
+
+| NDCG@10, decomposed | ACT-R (alpha=0) | **IMPACT (alpha=0.4)** | SASRec (alpha=1) |
+|---|---|---|---|
+| Repetition, local | 0.1445 | **0.1024** | 0.0444 |
+| Exploration, local | 0.0138 | **0.0098** | 0.0070 |
+| Repetition, global | 0.1004 | **0.0720** | 0.0328 |
+| Exploration, global | 0.0000 | **0.0022** | 0.0035 |
+
+The NDCG@10 metric decomposition reveals the trade-off introduced earlier. ACT-R's accuracy advantage is entirely driven by repetition &mdash; it performs well because music consumption is repetitive by nature, and ACT-R is specifically designed to model such behaviour. However, the downside is that its global exploration score is 0.000, meaning it cannot recommend a track outside the user's listening history (which leads to a filtering bubble). SASRec is at the other extreme &mdash; it can recommend genuinely new content, but with only a fraction of ACT-R's accuracy. **IMPACT bridges this gap** by retaining most of ACT-R's repetition-driven accuracy while maintaining a non-zero exploration ability &mdash; the outcome the hybrid was designed to produce.
 
 ## Citation
 
