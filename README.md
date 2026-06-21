@@ -46,6 +46,16 @@ The results presented above, which use only overall metrics, tell a misleading s
 
 The NDCG@10 metric decomposition reveals the trade-off introduced earlier. ACT-R's accuracy advantage is entirely driven by repetition &mdash; it performs well because music consumption is repetitive by nature, and ACT-R is specifically designed to model such behaviour. However, the downside is that its global exploration score is 0.000, meaning it cannot recommend a track outside the user's listening history (which leads to a filtering bubble). SASRec is at the other extreme &mdash; it can recommend genuinely new content, but with only a fraction of ACT-R's accuracy. **IMPACT bridges this gap** by retaining most of ACT-R's repetition-driven accuracy while maintaining a non-zero exploration ability &mdash; the outcome the hybrid was designed to produce.
 
+**Statistical significance.** To test whether the improvement is systematic rather than incidental, a Wilcoxon signed-rank test for paired data was applied to per-session NDCG@10 differences $d_i$ = NDCG@10(IMPACT) − NDCG@10(SASRec) across the full test set, under the following hypotheses:
+- $H_0$: The median of $d_i$ is zero &mdash; IMPACT does not outperform SASRec systematically.
+- $H_1$: The median of $d_i$ is positive &mdash; IMPACT systematically achieves a higher NDCG@10 than SASRec.
+
+The test rejected $H_0$ in favour of $H_1$ with a p-value $<< 0.001$ and an effect size r = 0.771 (Cohen's $d$ $\approx$ 2.42).
+
+Details that are worth stating explicitly:
+- **Effect size scope:** an effect size of r = 0.771 describes the strength and consistency of the difference among the 5,960 pairs (26.8% of the test set) in which the two systems actually differed. For the remaining 73.2%, both models returned identical scores &mdash; predominantly NDCG@10 = 0 for both, which is typical in sparse recommendation settings. The effect is large where it exists, but not uniformly large across the full test set.
+- **Direction:** of the 5,960 non-zero pairs, IMPACT outperformed SASRec in 5,182 cases (86.9%) and underperformed in 778 (13.1%) &mdash; a ratio of approximately 6.7:1 in favour of IMPACT, which is consistent with the one-sided hypothesis $H_1$. This could be understood like the following: **where introducing the personalised popularity signal changes the prediction at all, that change is nearly seven times more likely to help than to hurt.**
+
 ## Citation
 
 The accompanying master's thesis is undergoing formal review and defence at Wrocław University of Science and Technology, and cannot be shared publicly yet.
