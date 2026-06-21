@@ -22,6 +22,14 @@ Experiments showed that ACT-R achieves the highest ranking accuracy (NDCG@10), b
        width="860">
 </p>
 
+## Citation
+
+The accompanying master's thesis is undergoing formal review and defence at Wrocław University of Science and Technology, and cannot be shared publicly yet.
+
+This repository serves as the primary citable artifact. It contains the complete implementation of IMPACT, together with the experimental pipelines, diagrams, and results required to reproduce the findings reported in the thesis.
+
+If you use this software, please cite it using the entry provided in [`CITATION.cff`](CITATION.cff).
+
 ## References
 
 <a id="1">[1]</a>
