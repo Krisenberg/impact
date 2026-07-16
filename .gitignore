@@ -1,11 +1,13 @@
 .vscode
 data
+final-artefacts
 logs
 /models/*
 notebooks/*.ipynb
 !notebooks/kaggle_grid_search.ipynb
 !notebooks/kaggle_sasrec_training.ipynb
 reports
+tests
 
 # Created by https://www.toptal.com/developers/gitignore/api/python
 # Edit at https://www.toptal.com/developers/gitignore?templates=python
