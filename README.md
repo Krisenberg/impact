@@ -1,6 +1,6 @@
 # IMPACT
 
-**I**ntention-**M**odulated **P**ersonalized **ACT**-R &mdash; a hybrid sequential/cognitive-memory recommender system for music that beats SASRec (established baseline) by 114% NDCG@10 on the 4.8B-interaction Yambda-5B dataset. The full pipeline &mdash; download through training &mdash; runs within 16GB of RAM with no GPU and no OOM; the reported results were trained on GPU for speed though.
+**I**ntention-**M**odulated **P**ersonalized **ACT**-R &mdash; a hybrid sequential/cognitive-memory recommender system for music that beats SASRec (established baseline) by 114% NDCG@10 on the 4.8B-interaction Yambda-5B dataset. The full pipeline &mdash; dataset download, model training and system evaluation &mdash; runs within 16GB of RAM with no GPU and no OOM, though SASRec was trained on a GPU for speed.
 
 Built for master's thesis at Wrocław University of Science and Technology.
 
@@ -12,23 +12,23 @@ Built for master's thesis at Wrocław University of Science and Technology.
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![basedpyright - checked](https://img.shields.io/endpoint?url=https://docs.basedpyright.com/latest/badge.json)](https://docs.basedpyright.com)
 
-Sequential recommender systems, such as SASRec [[1]](#1), model what a user wants *right now*, within a short window of recent sessions. However, music listening is dominated by repetition &mdash; people return to their favourite tracks for months or even years &mdash; and this long-term signal is completely outside the scope of a short attention window. **IMPACT** adds it back in by using a personalised popularity signal derived from **ACT-R** [[2]](#2), a cognitive architecture that models how human declarative memory strengthens and weakens with use. This signal is weighted by whether each listen was actively chosen or just passively served by the streaming platform. The two models operate and reason independently and are combined at inference time, so the final "blend" can be adjusted/retuned without retraining SASRec (ACT-R is purely deterministic either way).
+Sequential recommender systems, such as SASRec [[1]](#1), model what a user wants *right now*, within a short window of recent sessions. However, music listening is dominated by repetition &mdash; people return to their favourite tracks for months or even years &mdash; and this long-term signal is completely outside the scope of a short attention window. **IMPACT** adds it back in by using a personalised popularity signal derived from **ACT-R** [[2]](#2), a cognitive architecture from 1993 that models how human declarative memory strengthens and weakens with use. This signal is weighted by whether each listen was actively chosen by the user or just passively served by the streaming platform. The two models operate independently and are combined at inference time, so the final "blend" can be adjusted/retuned without retraining SASRec (ACT-R is purely deterministic either way).
 
-Experiments showed that ACT-R achieves the highest ranking accuracy (NDCG@10), but can only recommend tracks already present in the user's listening history &mdash; its global exploration score is exactly 0.000 by definition. SASRec can recommend novel, previously unheard tracks, but at substantially lower ranking accuracy. **IMPACT** combines both capabilities, and on the full-scale **Yambda-5B** dataset (4.8 billion interactions) [[3]](#3) **improves NDCG@10 by +114%** relative to SASRec, while still being able to recommend tracks that the user has never heard before.
+Experiments showed that ACT-R achieves the highest ranking accuracy (NDCG@10), but can only recommend tracks already present in the user's listening history &mdash; its global exploration score is exactly 0.000 by definition. SASRec can recommend novel, previously unheard tracks, but at substantially lower ranking accuracy. **IMPACT** is "the best of both worlds", and on the full-scale **Yambda-5B** dataset (4.8 billion interactions) [[3]](#3) **improves NDCG@10 by +114%** relative to SASRec, while still being able to recommend tracks that the user has never heard before.
 
 ## Architecture
 
-The two pathways &mdash; SASRec and ACT-R &mdash; are fully decoupled and independent of each other. Fusion happens only at inference time, via a single hyperparameter alpha.
+The two components &mdash; SASRec and ACT-R &mdash; are fully decoupled and independent of each other. Fusion happens only at inference time, via a hyperparameter alpha.
 
 <p align="center">
     <img src="assets/impact_architecture.svg"
-       alt="IMPACT architecture: SASRec (session mean pooling + self-attention) and ACT-R (BLA+ memory signal) as independent pathways, merged at inference via a softmax-weighted late-fusion gate controlled by the hyperparameter alpha."
+       alt="IMPACT architecture: SASRec (session mean pooling + self-attention) and ACT-R (BLA+ memory signal) as independent components, merged at inference time via a late-fusion gate controlled by the hyperparameter alpha."
        width="860">
 </p>
 
 ## Results
 
-Three configurations of IMPACT were evaluated on the held-out Yambda-5B test set: pure ACT-R (alpha = 0), the optimal (empirically found) hybrid (alpha = 0.4) and pure SASRec (alpha = 1).
+Three configurations of IMPACT were evaluated on the held-out Yambda-5B test set: pure ACT-R, the optimal (empirically found) hybrid and pure SASRec.
 
 | Metric | ACT-R (alpha=0) | **IMPACT (alpha=0.4)** | SASRec (alpha=1) |
 |---|---|---|---|
@@ -46,14 +46,25 @@ The results presented above, which use only overall metrics, tell a misleading s
 
 The NDCG@10 metric decomposition reveals the trade-off introduced earlier. ACT-R's accuracy advantage is entirely driven by repetition &mdash; it performs well because music consumption is repetitive by nature, and ACT-R is specifically designed to model such behaviour. However, the downside is that its global exploration score is 0.000, meaning it cannot recommend a track outside the user's listening history (which leads to a filtering bubble). SASRec is at the other extreme &mdash; it can recommend genuinely new content, but with only a fraction of ACT-R's accuracy. **IMPACT bridges this gap** by retaining most of ACT-R's repetition-driven accuracy while maintaining a non-zero exploration ability &mdash; the outcome the hybrid was designed to produce.
 
-**Statistical significance.** To test whether the improvement is systematic rather than incidental, a Wilcoxon signed-rank test for paired data was applied to per-session NDCG@10 differences $d_i$ = NDCG@10(IMPACT) − NDCG@10(SASRec) across the full test set, under the following hypotheses:
-- $H_0$: The median of $d_i$ is zero &mdash; IMPACT does not outperform SASRec systematically.
+**Selecting alpha.** The three configurations evaluated above use $\alpha \in {0, 0.4, 1}$, but alpha is a continuous hyperparameter. To select the optimal value without overfitting to the held-out test set, all five NDCG@10 variants (overall + four decomposed) were swept across $\alpha \in [0, 1]$ in steps of 0.05 on the validation set of the smaller Yambda-50M variant (1% of the full dataset), used as a computational proxy. The found $\alpha_opt$ = 0.4 was then applied to the held-out Yambda-5B test set without further tuning.
+
+<p align="center">
+    <img src="assets/alpha_sweep_plot.svg"
+       alt="Alpha sweep: all five NDCG@10 variants plotted against alpha from 0 to 1 (with a step of 0.05). Global exploration is exactly 0.000 for alpha = 0 and increases as SASRec's weight grows, while repetition-based and overall accuracy decline monotonically."
+       width="860">
+</p>
+
+The plot makes the tradeoff clear: overall accuracy and repetition-based metrics decline monotonically as alpha increases, while global exploration is exactly 0.000 for small alpha values and only becomes non-zero once SASRec contributes enough weight to the fusion. $\alpha = 0.4$ is the point where the system recovers most of the exploration ability without sacrificing an unreasonable amount of the accuracy advantage that ACT-R provides. A pure ACT-R configuration ($\alpha = 0$) would score highest on every accuracy metric but would never recommend a track outside the user's history &mdash; it would always lead to a filter bubble by definition, regardless of the user's actual openness to new content.
+
+**Statistical significance.** To test whether the improvement is statistically significant, a Wilcoxon signed-rank test for paired data was applied to per-session NDCG@10 differences $d_i$ = NDCG@10(IMPACT) − NDCG@10(SASRec) across the full test set, under the following hypotheses:
+
+- $H_0$: The median of $d_i$ is zero &mdash; IMPACT does not outperform SASRec.
 - $H_1$: The median of $d_i$ is positive &mdash; IMPACT systematically achieves a higher NDCG@10 than SASRec.
 
 The test rejected $H_0$ in favour of $H_1$ with a p-value $<< 0.001$ and an effect size r = 0.771 (Cohen's $d$ $\approx$ 2.42).
 
 Details that are worth stating explicitly:
-- **Effect size scope:** an effect size of r = 0.771 describes the strength and consistency of the difference among the 5,960 pairs (26.8% of the test set) in which the two systems actually differed. For the remaining 73.2%, both models returned identical scores &mdash; predominantly NDCG@10 = 0 for both, which is typical in sparse recommendation settings. The effect is large where it exists, but not uniformly large across the full test set.
+- **Effect size scope:** an effect size of r = 0.771 describes the strength and consistency of the difference among the 5,960 pairs (26.8% of the test set) in which the two systems actually differed. For the remaining 73.2%, both models returned identical scores &mdash; predominantly NDCG@10 = 0 for both, which is typical in sparse recommendation scenarios. The effect is large where it exists, but not uniformly large across the full test set.
 - **Direction:** of the 5,960 non-zero pairs, IMPACT outperformed SASRec in 5,182 cases (86.9%) and underperformed in 778 (13.1%) &mdash; a ratio of approximately 6.7:1 in favour of IMPACT, which is consistent with the one-sided hypothesis $H_1$. This could be understood like the following: **where introducing the personalised popularity signal changes the prediction at all, that change is nearly seven times more likely to help than to hurt.**
 
 ## Citation
