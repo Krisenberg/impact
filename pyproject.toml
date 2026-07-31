@@ -1,6 +1,6 @@
 [project]
 name = "impact"
-version = "0.1.0"
+version = "0.2.0"
 description = "Intention-Modulated Personalized ACT-R: an extension to the ACT-R cognitive architecture that modulates memory traces based on user intent, applied to sequential music recommendations"
 readme = "README.md"
 authors = [
@@ -13,6 +13,7 @@ dependencies = [
     "huggingface-hub>=1.15.0",
     "jinja2>=3.1.6",
     "pandas>=3.0.3",
+    "pandera[polars]>=0.32.1",
     "polars[rt64]>=1.40.1",
     "pyarrow>=24.0.0",
     "python-dotenv>=1.2.2",
@@ -249,8 +250,7 @@ reportPrivateImportUsage = false # Assume that the user knows what they're doing
 
 executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
-  { root = "scripts/plots.py", reportAny = false, reportExplicitAny = false },
-  { root = "scripts/tables.py", reportAny = false },
+  { root = "scripts", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/config.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/main.py", reportExplicitAny = false },
