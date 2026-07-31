@@ -109,7 +109,7 @@ def render_data_funnel_stats(
         .to_latex(
             hrules=True,
             environment="threeparttable",  # To allow table footnotes
-            position="H",
+            position="!htb",
             position_float="centering",
             label="tab:data_funnel_stats",
             caption=" ".join(t["caption"].split()),
@@ -121,4 +121,4 @@ def render_data_funnel_stats(
 
 def _format_num(n: int) -> str:
     """Format integer with space as thousands separator."""
-    return f"{n:,}".replace(",", " ")
+    return f"{n:,}".replace(",", "\\,")
