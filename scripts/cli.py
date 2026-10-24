@@ -13,8 +13,6 @@ from . import tables_render_latex
 from .tables_data import compute_data_funnel_stats_for_variants
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from impact.config import ImpactConfig
 
     from .types import Language, TableFormat
@@ -24,7 +22,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 
 @click.group()
 def cli() -> None:
-    """Main script's CLI entry point."""
+    """CLI entry point for the scripts."""
     pass
 
 
@@ -63,8 +61,8 @@ def tables() -> None:
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
     help="""
-        Output directory for the LaTeX code and corresponding ImpactConfig YAML dumps.
-        Defaults to project root / 'reports' / 'tables' / 'data-funnel-stats'.
+        Output directory for the rendered table code and corresponding ImpactConfig YAML
+        dumps. Defaults to project root / 'reports' / 'tables' / 'data-funnel-stats'.
     """,
 )
 @click.option(
@@ -106,9 +104,7 @@ def generate_data_funnel_stats_table(
     processed_data_dir: Path | None = None,
 ) -> None:
     """Generate a table of record counts across data preparation stages."""
-    configure_logging(
-        level=logging.getLevelNamesMapping()[log_level],
-    )  # Configure logging without piping logs to files
+    configure_logging(level=logging.getLevelNamesMapping()[log_level])
 
     out_dir = out_dir or PROJECT_ROOT / "reports" / "tables" / "data-funnel-stats"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -120,20 +116,19 @@ def generate_data_funnel_stats_table(
         processed_data_dir=processed_data_dir or PROJECT_ROOT / "data" / "processed",
     )
 
-    renderer_ext_by_fmt: dict[TableFormat, tuple[Callable[..., str], str]] = {
-        "latex": (tables_render_latex.render_data_funnel_stats, "tex"),
-        # "markdown": tables_render_markdown.render_data_funnel_stats,
-    }
-
-    rendered_table = renderer_ext_by_fmt[fmt][0](data_df, lang.lower())
-    ext = renderer_ext_by_fmt[fmt][1]
+    match fmt:
+        case "latex":
+            rendered_table = tables_render_latex.render_data_funnel_stats(data_df, lang)
+            ext = "tex"
+        case _:
+            raise NotImplementedError
 
     for display_id, config in impact_config_by_display_id.items():
         config_dump_path = out_dir / f"{display_id}.yaml"
         config.write_yaml(config_dump_path)
         click.echo(f"Config dumped to {config_dump_path.as_posix()}")
 
-    out_file = out_dir / f"data_funnel_stats.{ext}"
+    out_file = out_dir / f"data_funnel_stats-{lang}.{ext}"
     _ = out_file.write_text(rendered_table)
     click.echo(f"Table saved at {out_file.as_posix()}")
 

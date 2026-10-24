@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING, Final, NamedTuple, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import pandera.polars as pa
 import polars as pl
@@ -36,7 +36,8 @@ class DataFunnelStatsSchema(pa.DataFrameModel):
     test_split: Series[pl.Int64] = pa.Field()
 
 
-class DataFunnelVariant(NamedTuple):
+@dataclasses.dataclass(frozen=True)
+class DataFunnelVariant:
     """Dataset variant to be included in data funnel stats table, e.g. Yambda-50M."""
 
     dataset_size: DatasetSize

@@ -1,8 +1,5 @@
-"""Module for creating tables in LaTeX format that are presented in the thesis."""
-
 from __future__ import annotations
 
-import string
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -32,10 +29,6 @@ def render_data_funnel_stats(
             "val_split": "Zbiór walidacyjny $S_{\\text{sek | val}}$",
             "test_split": "Zbiór testowy $S_{\\text{sek | test}}$",
             "caption": "Liczba rekordów na poszczególnych etapach przygotowania danych dla obu wariantów zbioru Yambda.",  # noqa: E501
-            "reproducibility_note": (
-                "Konfiguracja IMPACT Framework: \\texttt{$display_id}~"
-                "(\\cref{$appendix_label})."
-            ),
         },
         "en": {
             "stage": "Data preparation stage",
@@ -47,10 +40,6 @@ def render_data_funnel_stats(
             "val_split": "Validation split $S_{\\text{sek | val}}$",
             "test_split": "Test split $S_{\\text{sek | test}}$",
             "caption": "The number of records at each stage of data preparation for both variants of the Yambda dataset.",  # noqa: E501
-            "reproducibility_note": (
-                "The IMPACT Framework configuration: \\texttt{$display_id}~"
-                "(\\cref{$appendix_label})."
-            ),
         },
     }
     t = translations[lang]
@@ -65,41 +54,18 @@ def render_data_funnel_stats(
         "test_split",
     ]
 
-    rows: list[dict[str, str | int]] = []
-    footnotes: list[str] = []
-    markers: str = string.ascii_lowercase
-
-    for i, row in enumerate(data_funnel_stats_df.iter_rows(named=True)):
-        marker = markers[i]
-        tnote = f"\\tnote{{\\hyperlink{{note:{marker}}}{{{marker}}}}}"
-
-        config_display_id = row[DataFunnelStatsSchema.config_display_id]
-        rows.append(
-            {
-                "dataset": f"{row[DataFunnelStatsSchema.dataset_variant]}{tnote}",
-                **{header: _format_num(row[header]) for header in table_rows},
-            }
-        )
-
-        hypertarget = f"\\hypertarget{{note:{marker}}}{{{marker}}}"
-        note_text = string.Template(t["reproducibility_note"]).substitute(
-            display_id=config_display_id,
-            appendix_label=f"appendix:impactconfig:{config_display_id}",
-        )
-        footnotes.append(f"\\item[{hypertarget}]: {note_text}")
-
+    rows: list[dict[str, str | int]] = [
+        {
+            "dataset": row[DataFunnelStatsSchema.dataset_variant],
+            **{header: _format_num(row[header]) for header in table_rows},
+        }
+        for row in data_funnel_stats_df.iter_rows(named=True)
+    ]
     df = pl.DataFrame(
         {
             t["stage"]: [*[t[header] for header in table_rows]],
             **{r["dataset"]: [*[r[header] for header in table_rows]] for r in rows},
         }
-    )
-
-    tablenotes_latex = (
-        "\\begin{tablenotes}[flushleft]\n"
-        "\\footnotesize\n"
-        f"{'\n'.join(footnotes)}\n"
-        "\\end{tablenotes}\n"
     )
 
     return (
@@ -108,14 +74,13 @@ def render_data_funnel_stats(
         # Generate LaTeX table using Pandas Styler
         .to_latex(
             hrules=True,
-            environment="threeparttable",  # To allow table footnotes
+            environment="table",
             position="!htb",
             position_float="centering",
             label="tab:data_funnel_stats",
             caption=" ".join(t["caption"].split()),
             column_format="lrr",  # 'l' for the text, 'r' for the numbers
         )
-        .replace("\\end{tabular}\n", f"\\end{{tabular}}\n{tablenotes_latex}")
     )
 
 
