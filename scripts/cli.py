@@ -9,7 +9,7 @@ import click
 from impact.cli import inject_impact_config
 from impact.logger import configure_logging
 
-from . import tables_render_latex
+from . import tables_render_latex, tables_render_markdown
 from .tables_data import compute_data_funnel_stats_for_variants
 
 if TYPE_CHECKING:
@@ -118,10 +118,11 @@ def generate_data_funnel_stats_table(
 
     match fmt:
         case "latex":
-            rendered_table = tables_render_latex.render_data_funnel_stats(data_df, lang)
+            table = tables_render_latex.render_data_funnel_stats(data_df, lang)
             ext = "tex"
-        case _:
-            raise NotImplementedError
+        case "markdown":
+            table = tables_render_markdown.render_data_funnel_stats(data_df, lang)
+            ext = "md"
 
     for display_id, config in impact_config_by_display_id.items():
         config_dump_path = out_dir / f"{display_id}.yaml"
@@ -129,7 +130,7 @@ def generate_data_funnel_stats_table(
         click.echo(f"Config dumped to {config_dump_path.as_posix()}")
 
     out_file = out_dir / f"data_funnel_stats-{lang}.{ext}"
-    _ = out_file.write_text(rendered_table)
+    _ = out_file.write_text(table)
     click.echo(f"Table saved at {out_file.as_posix()}")
 
 
