@@ -8,6 +8,7 @@ notebooks/*.ipynb
 !notebooks/kaggle_sasrec_training.ipynb
 reports
 tests
+final-artefacts
 
 # Created by https://www.toptal.com/developers/gitignore/api/python
 # Edit at https://www.toptal.com/developers/gitignore?templates=python
