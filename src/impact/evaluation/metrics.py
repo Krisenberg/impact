@@ -1,16 +1,24 @@
-"""Batched, fully vectorized NDCG@K and Recall@K metrics for Next-Basket Recommendation.
+"""Batched, fully vectorized ranking metrics for Next-Basket Recommendation.
 
-All functions accept a targets tensor where 0 denotes a non-evaluable item (item outside
-the training index space). Samples containing no evaluable targets are excluded from the
-mean. This is particularly important for repetition-/exploration-focused sub-metrics,
+Provides Recall@k and NDCG@k implementations that support both per-sample and
+aggregated evaluation.
+
+Ground-truth target tensors use 0 as the non-evaluable item token (item outside the
+training index space). Per-sample metric functions return NaN for samples without any
+valid targets. Samples containing no evaluable targets are excluded from the mean in the
+aggregated evaluation. This is particularly important for rep-/exp-focused sub-metrics,
 where a sample may contribute only to one target subset.
 """
 
 import torch
 
 
-def compute_recall_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> float:
-    """Calculate mean Recall@K over all samples with at least one valid target.
+def compute_per_sample_recall_at_k(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    k: int,
+) -> torch.Tensor:
+    """Calculate per-sample Recall@k.
 
     Args:
         logits: [B, num_items + 1] scores from the model with index 0 masked.
@@ -18,11 +26,13 @@ def compute_recall_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> 
         k: Rank cutoff.
 
     Returns:
-        Mean Recall@K across all valid samples. Returns 0.0 if no valid sample exist.
+        Tensor of shape [B] containing Recall@k for each sample. Samples without at
+        least one valid target receive NaN.
     """
     valid_mask = (targets != 0).any(dim=-1)  # [B]
     if not valid_mask.any():
-        return 0.0  # No valid samples
+        # No valid samples
+        return torch.full((logits.shape[0],), torch.nan, device=logits.device)
 
     # Extract top-K predicted item indices
     _, topk_indices = torch.topk(logits, k=k, dim=-1)  # [B, k]
@@ -43,11 +53,12 @@ def compute_recall_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> 
 
     # Recall is the number of hits divided by the number of ground truth items
     recalls = num_hits / target_lengths  # [B]
-    return recalls[valid_mask].mean().item()
+    recalls = recalls.masked_fill(~valid_mask, torch.nan)
+    return recalls
 
 
-def compute_ndcg_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> float:
-    """Calculate mean NDCG@K over all samples with at least one valid target.
+def compute_recall_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> float:
+    """Calculate mean Recall@k over all samples with at least one valid target.
 
     Args:
         logits: [B, num_items + 1] scores from the model with index 0 masked.
@@ -55,11 +66,31 @@ def compute_ndcg_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> fl
         k: Rank cutoff.
 
     Returns:
-        Mean NDCG@K across all valid samples. Returns 0.0 if no valid sample exist.
+        Mean Recall@k across all valid samples.
+    """
+    return torch.nanmean(compute_per_sample_recall_at_k(logits, targets, k)).item()
+
+
+def compute_per_sample_ndcg_at_k(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    k: int,
+) -> torch.Tensor:
+    """Calculate per-sample NDCG@k.
+
+    Args:
+        logits: [B, num_items + 1] scores from the model with index 0 masked.
+        targets: [B, K] ground-truth item indices; 0 denotes a non-evaluable item.
+        k: Rank cutoff.
+
+    Returns:
+        Tensor of shape [B] containing NDCG@k for each sample. Samples without at
+        least one valid target receive NaN.
     """
     valid_mask = (targets != 0).any(dim=-1)  # [B]
     if not valid_mask.any():
-        return 0.0  # No valid samples
+        # No valid samples
+        return torch.full((logits.shape[0],), torch.nan, device=logits.device)
 
     # Extract top-K predicted item indices
     _, topk_indices = torch.topk(logits, k=k, dim=-1)  # [B, k]
@@ -90,4 +121,19 @@ def compute_ndcg_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> fl
     idcg = (ideal_hits * discounts).sum(dim=1).clamp(min=1e-8)  # [B]
 
     ndcg = dcg / idcg  # [B]
-    return ndcg[valid_mask].mean().item()
+    ndcg = ndcg.masked_fill(~valid_mask, torch.nan)
+    return ndcg
+
+
+def compute_ndcg_at_k(logits: torch.Tensor, targets: torch.Tensor, k: int) -> float:
+    """Calculate mean NDCG@k over all samples with at least one valid target.
+
+    Args:
+        logits: [B, num_items + 1] scores from the model with index 0 masked.
+        targets: [B, K] ground-truth item indices; 0 denotes a non-evaluable item.
+        k: Rank cutoff.
+
+    Returns:
+        Mean NDCG@k across all valid samples.
+    """
+    return torch.nanmean(compute_per_sample_ndcg_at_k(logits, targets, k)).item()

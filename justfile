@@ -11,8 +11,8 @@ install *ARGS: _uv
     uv sync --frozen {{ARGS}}
 
 # Synchronize dependencies
-sync: _uv
-    uv sync
+sync *ARGS: _uv
+    uv sync {{ARGS}}
 
 # Check code style and formatting (no fixes applied)
 lint: _uv
@@ -25,7 +25,7 @@ typecheck: _uv
     uv run basedpyright --stats
 
 # Run the IMPACT CLI
-run *ARGS: _uv
+impact *ARGS: _uv
     uv run cli {{ARGS}}
 
 # Run the scripts/plots.py CLI
@@ -35,6 +35,9 @@ thesis-plots *ARGS: _uv
 # Run the scripts/tables.py CLI
 thesis-tables *ARGS: _uv
     uv run scripts/tables.py {{ARGS}}
+
+table name *ARGS: _uv
+    uv run python -m scripts.cli tables {{name}} {{ARGS}}
 
 # Recursively remove cache and .pyc/.pyo files
 cleanup:

@@ -1,6 +1,6 @@
 [project]
 name = "impact"
-version = "0.1.0"
+version = "0.2.0"
 description = "Intention-Modulated Personalized ACT-R: an extension to the ACT-R cognitive architecture that modulates memory traces based on user intent, applied to sequential music recommendations"
 readme = "README.md"
 authors = [
@@ -13,10 +13,12 @@ dependencies = [
     "huggingface-hub>=1.15.0",
     "jinja2>=3.1.6",
     "pandas>=3.0.3",
+    "pandera[polars]>=0.32.1",
     "polars[rt64]>=1.40.1",
     "pyarrow>=24.0.0",
     "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
+    "scipy>=1.17.1",
     "structlog>=25.5.0",
     "tqdm>=4.67.3",
 ]
@@ -28,6 +30,7 @@ dev = [
     "mypy>=2.1.0",
     "pandas-stubs>=3.0.0.260204",
     "ruff>=0.15.13",
+    "scipy-stubs>=1.18.0.1",
     "types-psutil>=7.2.2.20260518",
     "types-pyyaml>=6.0.12.20260518",
     "types-tqdm>=4.67.3.20260518",
@@ -247,13 +250,13 @@ reportPrivateImportUsage = false # Assume that the user knows what they're doing
 
 executionEnvironments = [
   { root = "tests", reportAny = false, reportPrivateUsage = false }, # Suppress specific errors in tests
-  { root = "scripts/plots.py", reportAny = false, reportExplicitAny = false },
-  { root = "scripts/tables.py", reportAny = false },
+  { root = "scripts", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/cli.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/config.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/main.py", reportExplicitAny = false },
   { root = "src/impact/utils.py", reportImplicitStringConcatenation = false },
   { root = "src/impact/dataset/fetcher.py", reportUnknownVariableType = false },
+  { root = "src/impact/evaluation/significance.py", reportUnknownArgumentType = false, reportAttributeAccessIssue = false, reportAny = false },
   { root = "src/impact/features/sequence_extraction.py", reportExplicitAny = false },
   { root = "src/impact/features/tensorization.py", reportAny = false, reportExplicitAny = false },
   { root = "src/impact/models/sasrec/dataset.py", reportAny = false },
