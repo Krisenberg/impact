@@ -8,13 +8,15 @@ import structlog
 from .tables_data import DataFunnelStatsSchema
 
 if TYPE_CHECKING:
+    from pandera.typing.polars import DataFrame
+
     from .types import Language
 
 logger = structlog.stdlib.get_logger(__name__)
 
 
 def render_data_funnel_stats(
-    data_funnel_stats_df: pl.DataFrame,
+    data_funnel_stats_df: DataFrame[DataFunnelStatsSchema],
     lang: Language = "en",
 ) -> str:
     """Generate a Markdown table of record counts across data preparation stages."""
