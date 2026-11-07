@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: Głowacz
+    given-names: Krzysztof
+    orcid: https://orcid.org/0009-0009-0914-7395
+title: "IMPACT: Intention-Modulated Personalized ACT-R"
+abstract: "A hybrid sequential/cognitive-memory music recommender system extending SASRec
+  with a personalised popularity signal derived from the ACT-R cognitive architecture,
+  weighted by listen intentionality."
+repository-code: "https://github.com/Krisenberg/impact"
+url: "https://github.com/Krisenberg/impact"
+date-released: 2026-06-15
+license: MIT
+keywords:
+  - recommender-systems
+  - sequential-recommendation
+  - music-recommendation
+  - sasrec
+  - act-r
+  - cognitive-architecture
